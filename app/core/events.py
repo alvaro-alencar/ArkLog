@@ -6,9 +6,9 @@ Two responsibilities:
   2. In-process EventBus for decoupled EDA communication between modules
 
 Event flow:
-  GitHub push → event_bus.publish("github.push") → CommitAnalyzer
-  CommitAnalyzer → event_bus.publish("commit.batch_ready") → AIEngine
-  AIEngine → event_bus.publish("report.generated") → ClickUpPublisher
+  GitHub push → event_bus.publish("github.push") → CommitService
+  CommitService → event_bus.publish("commit.batch_ready") → AIEngine    [Phase 3]
+  AIEngine → event_bus.publish("report.generated") → ClickUpPublisher  [Phase 4]
 """
 
 from __future__ import annotations
@@ -69,6 +69,7 @@ async def on_startup() -> None:
     logger.info("startup_begin")
     await _init_database()
     await _load_projects()
+    await _wire_event_handlers()
     logger.info("startup_complete")
 
 
@@ -96,3 +97,12 @@ async def _load_projects() -> None:
         logger.info("projects_loaded", count=count, names=[p.name for p in projects_config.projects])
     except Exception as exc:
         logger.warning("projects_load_failed", error=str(exc))
+
+
+async def _wire_event_handlers() -> None:
+    """Register all event bus subscriptions. Add new subscribers here as phases expand."""
+    from app.services.commit_service import CommitService
+
+    service = CommitService()
+    event_bus.subscribe("github.push", service.handle_push_event)
+    logger.info("event_handlers_wired")

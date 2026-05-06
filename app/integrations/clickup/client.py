@@ -12,6 +12,7 @@ import httpx
 import structlog
 
 from app.core.config import settings
+from app.utils.clickup_formatter import markdown_to_clickup
 
 logger = structlog.get_logger(__name__)
 
@@ -37,7 +38,7 @@ class ClickUpClient:
         """
         response = await self._http.post(
             f"/task/{task_id}/comment",
-            json={"comment_text": text, "notify_all": False},
+            json={"comment": markdown_to_clickup(text), "notify_all": False},
         )
         response.raise_for_status()
         comment_id = str(response.json().get("id", ""))

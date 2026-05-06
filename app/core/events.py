@@ -16,13 +16,18 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 import structlog
+
+if TYPE_CHECKING:
+    from app.integrations.clickup.publisher import ClickUpPublisher
 
 logger = structlog.get_logger(__name__)
 
 EventHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+
+_clickup_pub: Optional["ClickUpPublisher"] = None
 
 
 class EventBus:
@@ -67,6 +72,7 @@ event_bus = EventBus()
 async def on_startup() -> None:
     """Side effects executed once when the application starts."""
     logger.info("startup_begin")
+    _validate_production_config()
     await _init_database()
     await _load_projects()
     await _wire_event_handlers()
@@ -75,11 +81,25 @@ async def on_startup() -> None:
 
 
 async def on_shutdown() -> None:
-    """Graceful shutdown — stop scheduler before process exits."""
+    """Graceful shutdown — stop scheduler and close HTTP clients before process exits."""
+    global _clickup_pub
     logger.info("shutdown_begin")
     from app.schedulers.scheduler import stop_scheduler
     await stop_scheduler()
+    if _clickup_pub is not None:
+        await _clickup_pub.close()
+        logger.info("clickup_client_closed")
     logger.info("shutdown_complete")
+
+
+def _validate_production_config() -> None:
+    """Abort startup if required secrets are missing in production."""
+    from app.core.config import settings
+    if settings.is_production and not settings.github_webhook_secret:
+        raise RuntimeError(
+            "GITHUB_WEBHOOK_SECRET must be set in production. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
 
 
 async def _init_database() -> None:
@@ -105,17 +125,18 @@ async def _wire_event_handlers() -> None:
     Register all event bus subscriptions.
     This is the single place where the full event topology is visible.
     """
+    global _clickup_pub
     from app.integrations.clickup.publisher import ClickUpPublisher
     from app.services.commit_service import CommitService
     from app.services.report_service import ReportService
 
     commit_svc = CommitService()
     report_svc = ReportService()
-    clickup_pub = ClickUpPublisher()
+    _clickup_pub = ClickUpPublisher()
 
     event_bus.subscribe("github.push", commit_svc.handle_push_event)
     event_bus.subscribe("commit.batch_ready", report_svc.handle_commit_batch)
-    event_bus.subscribe("report.generated", clickup_pub.handle_report_generated)
+    event_bus.subscribe("report.generated", _clickup_pub.handle_report_generated)
 
     logger.info("event_handlers_wired", subscriptions=3)
 

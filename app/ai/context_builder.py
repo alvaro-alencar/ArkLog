@@ -11,7 +11,31 @@ the commit payload is injected into the prompt. Nothing is inferred.
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+logger = structlog.get_logger(__name__)
+
+_FALLBACK_TEMPLATES: dict[str, str] = {
+    "report_executive.md": (
+        "Project: {project_name}\n"
+        "Description: {project_description}\n"
+        "Stack: {tech_stack}\n"
+        "Context: {business_context}\n"
+        "Period: {period_start} to {period_end}\n"
+        "Commits: {commit_count} | Files changed: {files_changed}\n"
+        "Areas: {directories}\n\n"
+        "Activity:\n{commit_summaries}"
+    ),
+    "report_technical.md": (
+        "Project: {project_name}\n"
+        "Stack: {tech_stack}\n"
+        "Period: {period_start} to {period_end}\n"
+        "Commits: {commit_count}\n\n"
+        "Details:\n{commit_details}"
+    ),
+}
 
 
 class ContextBuilder:
@@ -84,5 +108,6 @@ class ContextBuilder:
     def _load_template(self, filename: str) -> str:
         path = PROMPTS_DIR / filename
         if path.exists():
-            return path.read_text()
-        return "{project_name} — {commit_count} commits analyzed."
+            return path.read_text(encoding="utf-8")
+        logger.warning("template_not_found", filename=filename, fallback="using built-in")
+        return _FALLBACK_TEMPLATES[filename]

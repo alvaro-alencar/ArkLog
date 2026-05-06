@@ -10,11 +10,11 @@ Notes on GitHub push payload structure:
 - Branch extracted by stripping the "refs/heads/" prefix from `ref`
 """
 
-from datetime import datetime
 from typing import Any
 
 import structlog
 
+from app.core.config import settings
 from app.domain.entities.commit import Commit, CommitFile
 from app.utils.datetime_utils import parse_github_timestamp
 
@@ -28,6 +28,7 @@ class CommitParser:
         """
         Extract a list of Commit entities from a push webhook payload.
         Returns an empty list for payloads with no commits (e.g. tag pushes).
+        Truncates to MAX_COMMITS_PER_WEBHOOK to prevent context window overflow.
         """
         repo_full_name = payload.get("repository", {}).get("full_name", "")
         branch = self._extract_branch(payload.get("ref", ""))
@@ -36,6 +37,16 @@ class CommitParser:
         if not raw_commits:
             logger.debug("commit_parser_no_commits", repo=repo_full_name, branch=branch)
             return []
+
+        limit = settings.max_commits_per_webhook
+        if len(raw_commits) > limit:
+            logger.warning(
+                "commit_parser_truncated",
+                repo=repo_full_name,
+                total=len(raw_commits),
+                limit=limit,
+            )
+            raw_commits = raw_commits[:limit]
 
         commits = []
         for raw in raw_commits:

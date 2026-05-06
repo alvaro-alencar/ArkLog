@@ -4,7 +4,6 @@ ArkLog - Report Service
 Subscriber of "commit.batch_ready". Orchestrates report generation:
   commit.batch_ready → generate AI report → persist → publish report.generated
 
-Phase 4 will add a ClickUpPublisher that subscribes to "report.generated".
 Registered in app/core/events.py during on_startup().
 """
 
@@ -30,9 +29,10 @@ class ReportService:
 
     async def handle_commit_batch(self, payload: dict[str, Any]) -> None:
         project_name = payload.get("project_name", "unknown")
+        trigger = payload.get("trigger", "webhook")
         log = logger.bind(project=project_name)
 
-        log.info("report_service_triggered", commits=payload.get("commit_count", 0))
+        log.info("report_service_triggered", commits=payload.get("commit_count", 0), trigger=trigger)
 
         try:
             content, summary = await self._generator.generate(payload)
@@ -52,27 +52,30 @@ class ReportService:
                     log.warning("project_not_found_in_db", project=project_name)
                     return
 
-                session.add(
-                    ReportRecord(
-                        trigger=ReportTrigger.WEBHOOK.value,
-                        status=ReportStatus.GENERATED.value,
-                        content=content,
-                        summary=summary,
-                        commit_count=payload.get("commit_count", 0),
-                        project_id=project_record.id,
-                    )
+                record = ReportRecord(
+                    trigger=trigger,
+                    status=ReportStatus.GENERATED.value,
+                    content=content,
+                    summary=summary,
+                    commit_count=payload.get("commit_count", 0),
+                    project_id=project_record.id,
                 )
+                session.add(record)
+                await session.flush()
+                report_id = record.id
 
         preview = summary[:80] + "..." if len(summary) > 80 else summary
-        log.info("report_persisted", preview=preview)
+        log.info("report_persisted", preview=preview, report_id=report_id)
 
         await event_bus.publish(
             "report.generated",
             {
+                "report_id": report_id,
                 "project_name": project_name,
                 "clickup_task_id": payload.get("clickup_task_id", ""),
                 "content": content,
                 "summary": summary,
                 "commit_count": payload.get("commit_count", 0),
+                "trigger": trigger,
             },
         )

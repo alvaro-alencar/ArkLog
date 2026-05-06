@@ -39,8 +39,16 @@ class ProjectYamlEntry(BaseModel):
     def validate_schedule_format(cls, v: list[str]) -> list[str]:
         for time_str in v:
             parts = time_str.split(":")
-            if len(parts) != 2 or not (0 <= int(parts[0]) <= 23 and 0 <= int(parts[1]) <= 59):
-                raise ValueError(f"Invalid schedule time '{time_str}'. Use HH:MM format.")
+            try:
+                if len(parts) != 2:
+                    raise ValueError()
+                hour, minute = int(parts[0]), int(parts[1])
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError()
+            except (ValueError, IndexError):
+                raise ValueError(
+                    f"Invalid schedule time '{time_str}'. Use HH:MM format (e.g., '09:00')."
+                )
         return v
 
     def to_entity(self) -> Project:
@@ -92,7 +100,7 @@ class ProjectsConfig:
             )
             return []
 
-        with config_path.open() as f:
+        with config_path.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f)
 
         if not raw or "projects" not in raw:

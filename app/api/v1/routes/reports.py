@@ -6,13 +6,13 @@ GET /reports/{report_id}               — full report content
 """
 
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import select
 
 from app.config.projects import projects_config
 from app.models.database import AsyncSessionLocal
 from app.models.tables import ProjectRecord
 from app.repositories.report_repository import ReportRepository
 from app.schemas.report import ReportDetailResponse, ReportListResponse, ReportSummaryResponse
-from sqlalchemy import select
 
 router = APIRouter()
 
@@ -69,11 +69,9 @@ async def get_report(report_id: int) -> ReportDetailResponse:
         repo = ReportRepository(session)
         record = await repo.get_by_id(report_id)
 
-    if not record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+        if not record:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
-    # Resolve project name from config (avoids an extra DB join)
-    async with AsyncSessionLocal() as session:
         proj_result = await session.execute(
             select(ProjectRecord).where(ProjectRecord.id == record.project_id).limit(1)
         )

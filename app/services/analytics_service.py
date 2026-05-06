@@ -9,7 +9,7 @@ Health score algorithm (0–100):
   Recency   (30pts) — days since last commit (lower = better)
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import structlog
@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from app.models.database import AsyncSessionLocal
 from app.models.tables import CommitRecord, ProjectRecord, ReportRecord
 from app.schemas.analytics import AnalyticsSummaryResponse, HealthScore, ProjectStats
+from app.utils.datetime_utils import naive_utcnow
 
 logger = structlog.get_logger(__name__)
 
@@ -33,7 +34,7 @@ class AnalyticsService:
                 return None
 
             pid = project.id
-            thirty_ago = datetime.utcnow() - timedelta(days=30)
+            thirty_ago = naive_utcnow() - timedelta(days=30)
 
             total_commits = await _scalar(
                 session, select(func.count(CommitRecord.id)).where(CommitRecord.project_id == pid)
@@ -60,7 +61,7 @@ class AnalyticsService:
 
             days_ago: Optional[int] = None
             if last_commit_at:
-                days_ago = (datetime.utcnow() - last_commit_at).days
+                days_ago = (naive_utcnow() - last_commit_at).days
 
             return ProjectStats(
                 project_name=project_name,

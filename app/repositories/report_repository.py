@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tables import ProjectRecord, ReportRecord
+from app.models.tables import ReportRecord
 from app.repositories.base import BaseRepository
 
 
@@ -48,12 +48,7 @@ class ReportRepository(BaseRepository[ReportRecord]):
         return result.scalar_one_or_none()
 
     async def get_by_id(self, report_id: int) -> Optional[ReportRecord]:
-        result = await self._session.execute(
-            select(ReportRecord)
-            .join(ProjectRecord, ReportRecord.project_id == ProjectRecord.id)
-            .where(ReportRecord.id == report_id)
-        )
-        return result.scalar_one_or_none()
+        return await self._session.get(ReportRecord, report_id)
 
     async def get_since(self, project_id: int, since: datetime) -> list[ReportRecord]:
         result = await self._session.execute(

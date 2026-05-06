@@ -12,6 +12,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.database import Base
+from app.utils.datetime_utils import naive_utcnow
 
 
 class ProjectRecord(Base):
@@ -23,7 +24,7 @@ class ProjectRecord(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     repo_full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     clickup_task_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
 
     reports: Mapped[list["ReportRecord"]] = relationship(back_populates="project")
     commits: Mapped[list["CommitRecord"]] = relationship(back_populates="project")
@@ -42,7 +43,7 @@ class CommitRecord(Base):
     committed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     branch: Mapped[str] = mapped_column(String(255), nullable=False)
     files_changed: Mapped[int] = mapped_column(Integer, default=0)
-    processed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
 
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     project: Mapped["ProjectRecord"] = relationship(back_populates="commits")
@@ -59,7 +60,7 @@ class ReportRecord(Base):
     content: Mapped[str] = mapped_column(Text, default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     commit_count: Mapped[int] = mapped_column(Integer, default=0)
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     clickup_comment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 

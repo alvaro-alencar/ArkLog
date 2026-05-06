@@ -50,9 +50,9 @@ class ReportGenerator:
 
         client = get_openai_client()
         response = await client.chat.completions.create(
-            model=settings.openai_model,
-            max_tokens=settings.openai_max_tokens,
-            temperature=settings.openai_temperature,
+            model=settings.ai_model,
+            max_tokens=settings.ai_max_tokens,
+            temperature=settings.ai_temperature,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

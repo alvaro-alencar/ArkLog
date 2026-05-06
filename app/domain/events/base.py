@@ -13,6 +13,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from app.utils.datetime_utils import naive_utcnow
+
 
 class EventType(str, Enum):
     # GitHub
@@ -41,7 +43,7 @@ class DomainEvent:
     """Base class for all domain events."""
 
     event_type: EventType
-    occurred_at: datetime = field(default_factory=datetime.utcnow)
+    occurred_at: datetime = field(default_factory=naive_utcnow)
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

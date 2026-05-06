@@ -1,0 +1,46 @@
+{
+  "ref": "refs/heads/main",
+  "before": "0000000000000000000000000000000000000000",
+  "after": "def5678901234defabcdef5678901234defabcd",
+  "repository": {
+    "id": 123456,
+    "full_name": "my-org/smartead",
+    "name": "smartead",
+    "private": false,
+    "html_url": "https://github.com/my-org/smartead"
+  },
+  "pusher": {
+    "name": "alvaro",
+    "email": "alvaro@example.com"
+  },
+  "commits": [
+    {
+      "id": "abc1234567890abcdef1234567890abcdef1234",
+      "message": "feat: add user authentication module\n\nImplements JWT-based auth with refresh token support.",
+      "timestamp": "2025-05-06T10:30:00Z",
+      "url": "https://github.com/my-org/smartead/commit/abc1234567890abcdef1234567890abcdef1234",
+      "author": {
+        "name": "Alvaro Alencar",
+        "email": "alvaro@example.com",
+        "username": "alvaro-alencar"
+      },
+      "added": ["app/auth/jwt.py", "app/auth/__init__.py"],
+      "modified": ["app/main.py", "pyproject.toml"],
+      "removed": []
+    },
+    {
+      "id": "def5678901234defabcdef5678901234defabcd",
+      "message": "fix: correct token expiration calculation",
+      "timestamp": "2025-05-06T11:00:00Z",
+      "url": "https://github.com/my-org/smartead/commit/def5678901234defabcdef5678901234defabcd",
+      "author": {
+        "name": "Alvaro Alencar",
+        "email": "alvaro@example.com",
+        "username": "alvaro-alencar"
+      },
+      "added": [],
+      "modified": ["app/auth/jwt.py"],
+      "removed": ["app/auth/old_auth.py"]
+    }
+  ]
+}

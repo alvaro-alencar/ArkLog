@@ -1,0 +1,33 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ArkLog - Docker Compose
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+services:
+  arklog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arklog
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./projects.yaml:/app/projects.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - arklog-network
+
+networks:
+  arklog-network:
+    driver: bridge

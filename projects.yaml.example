@@ -1,0 +1,39 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ArkLog - Projects Configuration
+# Copy to projects.yaml and configure your monitored projects
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+projects:
+  - name: "SmartEAD"
+    description: "Plataforma de educação adaptativa com IA"
+    repo_owner: "my-org"
+    repo_name: "smartead"
+    clickup_task_id: "abc123xyz"
+    report_style: "executivo"  # executivo | tecnico | misto
+    tech_stack:
+      - Python
+      - FastAPI
+      - React
+      - PostgreSQL
+    business_context: "Sistema de ensino online com personalização por IA para escolas e empresas."
+    schedule:
+      - "09:00"
+      - "15:00"
+      - "22:00"
+
+  - name: "NexusAI"
+    description: "Plataforma de automação com agentes de IA"
+    repo_owner: "my-org"
+    repo_name: "nexus-ai"
+    clickup_task_id: "def456uvw"
+    report_style: "misto"
+    tech_stack:
+      - Python
+      - FastAPI
+      - LangChain
+      - Redis
+    business_context: "Infraestrutura de agentes IA para automação de processos empresariais."
+    schedule:
+      - "09:00"
+      - "12:00"
+      - "18:00"

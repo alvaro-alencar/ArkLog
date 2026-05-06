@@ -1,51 +1,44 @@
 """
-ArkLog - Markdown to ClickUp Rich Text Converter
+ArkLog - Markdown to ClickUp Plain Text Converter
 
-ClickUp comments use a Quill-based delta format where each op uses
-"text" (not "insert") and lists use {"list": {"list": "bullet"}}.
+ClickUp task comment API only accepts comment_text (plain text).
+Rich text delta format is not supported via the public API.
 
-Supported: ## headings, ### subheadings, **bold**, *italic*, - bullets, plain text.
+This module strips Markdown markers and replaces them with
+visual plain-text equivalents that render cleanly in ClickUp.
 """
 
 import re
-from typing import Any
-
-Op = dict[str, Any]
 
 
-def markdown_to_clickup(text: str) -> list[Op]:
-    """Convert Markdown to ClickUp delta operations."""
-    ops: list[Op] = []
+def markdown_to_clickup(text: str) -> str:
+    """Convert Markdown to visually structured plain text for ClickUp."""
+    lines = text.split("\n")
+    out: list[str] = []
 
-    for line in text.split("\n"):
+    for line in lines:
         if line.startswith("### "):
-            _parse_inline(ops, line[4:])
-            ops.append({"text": "\n", "attributes": {"header": 3}})
+            content = _strip_inline(line[4:])
+            out.append(f"\n◆ {content}")
         elif line.startswith("## "):
-            _parse_inline(ops, line[3:])
-            ops.append({"text": "\n", "attributes": {"header": 2}})
+            content = _strip_inline(line[3:])
+            out.append(f"\n{content.upper()}")
         elif line.startswith("# "):
-            _parse_inline(ops, line[2:])
-            ops.append({"text": "\n", "attributes": {"header": 1}})
+            content = _strip_inline(line[2:])
+            out.append(f"\n{content.upper()}")
         elif re.match(r"^[-*] ", line):
-            _parse_inline(ops, line[2:])
-            ops.append({"text": "\n", "attributes": {"list": {"list": "bullet"}}})
+            content = _strip_inline(line[2:])
+            out.append(f"  • {content}")
         elif line.strip() == "---":
-            ops.append({"text": "\n"})
+            out.append("─" * 40)
         else:
-            _parse_inline(ops, line)
-            ops.append({"text": "\n"})
+            out.append(_strip_inline(line))
 
-    return ops
+    return "\n".join(out).strip()
 
 
-def _parse_inline(ops: list[Op], text: str) -> None:
-    """Parse **bold** and *italic* inline markers into delta ops."""
-    for m in re.finditer(r"\*\*(.+?)\*\*|\*(.+?)\*|([^*]+)", text):
-        bold, italic, plain = m.group(1), m.group(2), m.group(3)
-        if bold:
-            ops.append({"text": bold, "attributes": {"bold": True}})
-        elif italic:
-            ops.append({"text": italic, "attributes": {"italic": True}})
-        elif plain:
-            ops.append({"text": plain})
+def _strip_inline(text: str) -> str:
+    """Remove **bold** and *italic* markers, keeping the text."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    return text

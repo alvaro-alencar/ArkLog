@@ -38,7 +38,7 @@ class ClickUpClient:
         """
         response = await self._http.post(
             f"/task/{task_id}/comment",
-            json={"comment": markdown_to_clickup(text), "notify_all": False},
+            json={"comment_text": markdown_to_clickup(text), "notify_all": False},
         )
         response.raise_for_status()
         comment_id = str(response.json().get("id", ""))

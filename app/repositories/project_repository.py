@@ -1,9 +1,9 @@
 """
 ArkLog - Project Repository
 
-Syncs project domain entities (from projects.yaml) into the database.
-The get_or_create pattern ensures a DB record exists for every configured
-project without requiring manual migration steps.
+Persists project records and synchronizes them with projects.yaml.
+The get_or_create pattern ensures projects.yaml is always the source
+of truth while maintaining a stable DB identity for foreign keys.
 """
 
 from sqlalchemy import select
@@ -19,16 +19,24 @@ class ProjectRepository(BaseRepository[ProjectRecord]):
         super().__init__(session, ProjectRecord)
 
     async def get_or_create(self, project: Project) -> ProjectRecord:
-        """Return existing DB record or create one. Safe to call multiple times."""
+        """
+        Return the existing ProjectRecord or create a new one.
+        Called each time a push event arrives to ensure the project
+        exists in the DB before linking commits to it.
+        """
         result = await self._session.execute(
-            select(ProjectRecord).where(ProjectRecord.name == project.name).limit(1)
+            select(ProjectRecord)
+            .where(ProjectRecord.name == project.name)
+            .limit(1)
         )
-        record = result.scalar_one_or_none()
-        if record is None:
-            record = ProjectRecord(
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing
+
+        return await self.add(
+            ProjectRecord(
                 name=project.name,
                 repo_full_name=project.repo_full_name,
                 clickup_task_id=project.clickup_task_id,
             )
-            record = await self.add(record)
-        return record
+        )

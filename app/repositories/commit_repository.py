@@ -1,9 +1,8 @@
 """
 ArkLog - Commit Repository
 
-Data access for CommitRecord. The `exists` method is the idempotency guard —
-if the same commit arrives via multiple webhook deliveries (GitHub retries),
-we skip it silently rather than raising a unique-constraint error.
+Persists and queries Commit records. Extends BaseRepository with
+commit-specific queries needed by CommitService and the scheduler.
 """
 
 from datetime import datetime
@@ -21,13 +20,14 @@ class CommitRepository(BaseRepository[CommitRecord]):
         super().__init__(session, CommitRecord)
 
     async def exists(self, sha: str) -> bool:
-        """Check if a commit is already stored. Used for idempotent ingestion."""
+        """Check if a commit was already processed (idempotency guard)."""
         result = await self._session.execute(
             select(CommitRecord.id).where(CommitRecord.sha == sha).limit(1)
         )
-        return result.scalar() is not None
+        return result.scalar_one_or_none() is not None
 
     async def save_commit(self, commit: Commit, project_id: int) -> CommitRecord:
+        """Persist a Commit entity linked to a project."""
         record = CommitRecord(
             sha=commit.sha,
             message=commit.message,
@@ -40,12 +40,16 @@ class CommitRepository(BaseRepository[CommitRecord]):
         )
         return await self.add(record)
 
-    async def get_since(self, project_id: int, since: datetime) -> list[CommitRecord]:
-        """Fetch commits for a project after a given datetime, ordered chronologically."""
+    async def get_since(
+        self, project_id: int, since: datetime
+    ) -> list[CommitRecord]:
+        """Return all commits for a project after a given datetime."""
         result = await self._session.execute(
             select(CommitRecord)
-            .where(CommitRecord.project_id == project_id)
-            .where(CommitRecord.committed_at >= since)
+            .where(
+                CommitRecord.project_id == project_id,
+                CommitRecord.committed_at >= since,
+            )
             .order_by(CommitRecord.committed_at.asc())
         )
         return list(result.scalars().all())

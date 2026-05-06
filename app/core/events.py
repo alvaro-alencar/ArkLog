@@ -5,10 +5,10 @@ Two responsibilities:
   1. Lifecycle hooks (on_startup / on_shutdown) called by FastAPI lifespan
   2. In-process EventBus for decoupled EDA communication between modules
 
-Event flow:
-  GitHub push → event_bus.publish("github.push") → CommitService
-  CommitService → event_bus.publish("commit.batch_ready") → AIEngine    [Phase 3]
-  AIEngine → event_bus.publish("report.generated") → ClickUpPublisher  [Phase 4]
+Full event flow:
+  github.push         → CommitService.handle_push_event
+  commit.batch_ready  → ReportService.handle_commit_batch   [Phase 3]
+  report.generated    → ClickUpPublisher.publish            [Phase 4]
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ class EventBus:
                 logger.error("event_handler_error", event_type=event_type, error=str(result))
 
 
-# Global singleton — import this throughout the codebase
 event_bus = EventBus()
 
 
@@ -74,7 +73,6 @@ async def on_startup() -> None:
 
 
 async def on_shutdown() -> None:
-    """Graceful shutdown routines."""
     logger.info("shutdown_begin")
     logger.info("shutdown_complete")
 
@@ -82,7 +80,6 @@ async def on_shutdown() -> None:
 async def _init_database() -> None:
     try:
         from app.models.database import init_db
-
         await init_db()
         logger.info("database_initialized")
     except Exception as exc:
@@ -92,7 +89,6 @@ async def _init_database() -> None:
 async def _load_projects() -> None:
     try:
         from app.config.projects import projects_config
-
         count = len(projects_config.projects)
         logger.info("projects_loaded", count=count, names=[p.name for p in projects_config.projects])
     except Exception as exc:
@@ -100,9 +96,18 @@ async def _load_projects() -> None:
 
 
 async def _wire_event_handlers() -> None:
-    """Register all event bus subscriptions. Add new subscribers here as phases expand."""
+    """
+    Register all event bus subscriptions.
+    This is the single place where the full event topology is visible.
+    Add new subscribers here as phases expand.
+    """
     from app.services.commit_service import CommitService
+    from app.services.report_service import ReportService
 
-    service = CommitService()
-    event_bus.subscribe("github.push", service.handle_push_event)
-    logger.info("event_handlers_wired")
+    commit_svc = CommitService()
+    report_svc = ReportService()
+
+    event_bus.subscribe("github.push", commit_svc.handle_push_event)
+    event_bus.subscribe("commit.batch_ready", report_svc.handle_commit_batch)
+
+    logger.info("event_handlers_wired", subscriptions=2)

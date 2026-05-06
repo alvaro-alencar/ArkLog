@@ -1,9 +1,8 @@
 """
 ArkLog - Markdown to ClickUp Rich Text Converter
 
-ClickUp comments use Quill delta format, not Markdown.
-This module converts the Markdown subset produced by the AI into
-ClickUp-compatible delta operations.
+ClickUp comments use a Quill-based delta format where each op uses
+"text" (not "insert") and lists use {"list": {"list": "bullet"}}.
 
 Supported: ## headings, ### subheadings, **bold**, *italic*, - bullets, plain text.
 """
@@ -15,27 +14,27 @@ Op = dict[str, Any]
 
 
 def markdown_to_clickup(text: str) -> list[Op]:
-    """Convert Markdown to ClickUp Quill delta operations."""
+    """Convert Markdown to ClickUp delta operations."""
     ops: list[Op] = []
 
     for line in text.split("\n"):
         if line.startswith("### "):
             _parse_inline(ops, line[4:])
-            ops.append({"insert": "\n", "attributes": {"header": 3}})
+            ops.append({"text": "\n", "attributes": {"header": 3}})
         elif line.startswith("## "):
             _parse_inline(ops, line[3:])
-            ops.append({"insert": "\n", "attributes": {"header": 2}})
+            ops.append({"text": "\n", "attributes": {"header": 2}})
         elif line.startswith("# "):
             _parse_inline(ops, line[2:])
-            ops.append({"insert": "\n", "attributes": {"header": 1}})
+            ops.append({"text": "\n", "attributes": {"header": 1}})
         elif re.match(r"^[-*] ", line):
             _parse_inline(ops, line[2:])
-            ops.append({"insert": "\n", "attributes": {"list": "bullet"}})
+            ops.append({"text": "\n", "attributes": {"list": {"list": "bullet"}}})
         elif line.strip() == "---":
-            ops.append({"insert": "\n"})
+            ops.append({"text": "\n"})
         else:
             _parse_inline(ops, line)
-            ops.append({"insert": "\n"})
+            ops.append({"text": "\n"})
 
     return ops
 
@@ -45,8 +44,8 @@ def _parse_inline(ops: list[Op], text: str) -> None:
     for m in re.finditer(r"\*\*(.+?)\*\*|\*(.+?)\*|([^*]+)", text):
         bold, italic, plain = m.group(1), m.group(2), m.group(3)
         if bold:
-            ops.append({"insert": bold, "attributes": {"bold": True}})
+            ops.append({"text": bold, "attributes": {"bold": True}})
         elif italic:
-            ops.append({"insert": italic, "attributes": {"italic": True}})
+            ops.append({"text": italic, "attributes": {"italic": True}})
         elif plain:
-            ops.append({"insert": plain})
+            ops.append({"text": plain})

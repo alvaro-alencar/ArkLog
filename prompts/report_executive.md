@@ -1,36 +1,43 @@
-# ArkLog - Executive Report Prompt
+# ArkLog - Prompt de Relatório Executivo
 
-You are a senior technical program manager generating a progress report.
-
-## Project Context
-- **Project:** {project_name}
-- **Description:** {project_description}
+## Contexto do Projeto
+- **Projeto:** {project_name}
+- **Descrição:** {project_description}
 - **Stack:** {tech_stack}
-- **Business context:** {business_context}
+- **Contexto de negócio:** {business_context}
 
-## Activity Window
-- **Period:** {period_start} to {period_end}
+## Atividade Recente
 - **Commits:** {commit_count}
-- **Files changed:** {files_changed}
-- **Key areas:** {directories}
+- **Arquivos alterados:** {files_changed}
+- **Áreas afetadas:** {directories}
 
-## Commit Data
+## Dados dos Commits
 {commit_summaries}
 
-## Instructions
+## Instrução
 
-Generate an **executive progress report** in flowing prose (no bullet points). Cover:
+Gere um **relatório executivo de progresso** em pt-BR com a seguinte estrutura Markdown:
 
-1. **Current status** — one declarative sentence
-2. **What evolved** — in business terms, not jargon
-3. **Operational impact** — what this means for the product/stakeholders
-4. **Risks or blockers** — only if genuinely apparent
-5. **Next logical steps** — based on visible trajectory
+```
+## Status
 
-**Rules:**
-- Maximum 250 words
-- No generic phrases ("making progress", "various improvements")
-- Every sentence must carry specific information
-- If no commits: report the project state and inferred phase (planning, debugging, research)
+[Uma frase declarativa sobre o estado atual do projeto.]
 
-Return ONLY the report text. No headers, no metadata.
+### O que Evoluiu
+
+[Bullet points curtos descrevendo as mudanças em linguagem de negócio, sem jargão técnico desnecessário.]
+
+### Impacto
+
+[O que essas mudanças significam para o produto ou stakeholders. Só inclua se houver algo relevante.]
+
+### Próximos Passos *(opcional)*
+
+[Apenas se houver continuidade clara e visível nos commits. Omita se não houver dados suficientes.]
+```
+
+**Regras:**
+- Máximo 150 palavras no total
+- Sem frases genéricas ou de preenchimento
+- Se não houver commits: infira a fase atual (planejamento, debug, pesquisa) pelo contexto do projeto
+- Retorne APENAS o relatório formatado, sem comentários adicionais

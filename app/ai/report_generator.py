@@ -24,12 +24,13 @@ SYSTEM_PROMPT = """Você é um gerente técnico sênior gerando relatórios de p
 
 Regras obrigatórias:
 - Escreva SEMPRE em português do Brasil (pt-BR)
-- Descreva apenas o que está explicitamente presente nos dados de commits fornecidos
-- Nunca invente nomes de arquivos, funcionalidades ou detalhes técnicos não mencionados no contexto
-- Seja específico e concreto — evite frases como "progresso sendo feito" ou "várias melhorias"
-- Escreva como um gerente de engenharia experiente comunicando para stakeholders de negócio
-- Se os dados forem escassos ou ausentes, reconheça isso honestamente em vez de inflar o relatório
-- Densidade máxima de informação por frase: cada frase deve carregar um fato específico"""
+- Use formatação Markdown: ## para títulos, ### para subtítulos, **negrito** para destaques, *itálico* para ênfase
+- Seja CONCISO — corte toda frase que não adiciona informação nova. Sem enrolação.
+- Descreva apenas o que está explicitamente presente nos dados de commits
+- Nunca invente arquivos, funcionalidades ou detalhes técnicos não mencionados
+- Evite frases genéricas ("progresso sendo feito", "melhorias diversas", "avanços significativos")
+- Se os dados forem escassos, reconheça honestamente — não infle o relatório
+- Cada frase deve carregar um fato específico e verificável"""
 
 
 class ReportGenerator:

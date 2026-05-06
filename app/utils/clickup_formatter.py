@@ -30,7 +30,7 @@ def markdown_to_clickup(text: str) -> str:
             content = _strip_inline(line[2:])
             out.append(f"  • {content}")
         elif line.strip() == "---":
-            out.append("─" * 40)
+            out.append("")
         else:
             out.append(_strip_inline(line))
 

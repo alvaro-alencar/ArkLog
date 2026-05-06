@@ -1,64 +1,92 @@
 """
 ArkLog - GitHub Commit Parser
 
-Transforms a raw GitHub push webhook payload into Commit domain entities.
+Transforms a raw GitHub push webhook payload into typed Commit entities.
 
-GitHub push webhooks split file changes into three arrays (added / modified / removed).
-We map each filename to a CommitFile with the appropriate status.
-
-Note: Push webhooks do not include per-file diff counts (additions/deletions).
-Those require a separate GitHub API call and will be added in Phase 3 if needed.
+Notes on GitHub push payload structure:
+- `commits` array contains individual commit objects
+- Files are split into `added`, `modified`, `removed` arrays (filenames only)
+- Full diff counts require a separate API call — not available in webhooks
+- Branch extracted by stripping the "refs/heads/" prefix from `ref`
 """
 
+from datetime import datetime
 from typing import Any
+
+import structlog
 
 from app.domain.entities.commit import Commit, CommitFile
 from app.utils.datetime_utils import parse_github_timestamp
 
+logger = structlog.get_logger(__name__)
+
 
 class CommitParser:
-    """Parses GitHub push event payloads into Commit domain entities."""
+    """Parses GitHub push webhook payloads into Commit domain entities."""
 
     def parse(self, payload: dict[str, Any]) -> list[Commit]:
         """
-        Extract all commits from a push webhook payload.
-        Returns an empty list for branch deletions or pushes with no commits.
+        Extract a list of Commit entities from a push webhook payload.
+        Returns an empty list for payloads with no commits (e.g. tag pushes).
         """
         repo_full_name = payload.get("repository", {}).get("full_name", "")
-        ref = payload.get("ref", "")
-        branch = ref.removeprefix("refs/heads/")
-
+        branch = self._extract_branch(payload.get("ref", ""))
         raw_commits = payload.get("commits", [])
+
         if not raw_commits:
+            logger.debug("commit_parser_no_commits", repo=repo_full_name, branch=branch)
             return []
 
-        return [
-            self._parse_commit(raw, repo_full_name, branch)
-            for raw in raw_commits
-        ]
+        commits = []
+        for raw in raw_commits:
+            try:
+                commits.append(self._parse_single(raw, repo_full_name, branch))
+            except Exception as exc:
+                logger.error(
+                    "commit_parse_error",
+                    sha=raw.get("id", "?"),
+                    error=str(exc),
+                )
 
-    def _parse_commit(
+        logger.info(
+            "commits_parsed",
+            repo=repo_full_name,
+            branch=branch,
+            count=len(commits),
+        )
+        return commits
+
+    def _parse_single(
         self, raw: dict[str, Any], repo_full_name: str, branch: str
     ) -> Commit:
-        author = raw.get("author", {})
-        timestamp = parse_github_timestamp(raw.get("timestamp", "1970-01-01T00:00:00Z"))
-
-        files: list[CommitFile] = []
-        for filename in raw.get("added", []):
-            files.append(CommitFile(filename=filename, status="added"))
-        for filename in raw.get("modified", []):
-            files.append(CommitFile(filename=filename, status="modified"))
-        for filename in raw.get("removed", []):
-            files.append(CommitFile(filename=filename, status="removed"))
+        sha = raw["id"]
+        files = self._parse_files(raw)
+        timestamp = parse_github_timestamp(raw["timestamp"])
 
         return Commit(
-            sha=raw.get("id", ""),
+            sha=sha,
             message=raw.get("message", ""),
-            author_name=author.get("name", ""),
-            author_email=author.get("email", ""),
+            author_name=raw.get("author", {}).get("name", ""),
+            author_email=raw.get("author", {}).get("email", ""),
             timestamp=timestamp,
             url=raw.get("url", ""),
             repo_full_name=repo_full_name,
             branch=branch,
             files=tuple(files),
         )
+
+    def _parse_files(self, raw: dict[str, Any]) -> list[CommitFile]:
+        files = []
+        for filename in raw.get("added", []):
+            files.append(CommitFile(filename=filename, status="added"))
+        for filename in raw.get("modified", []):
+            files.append(CommitFile(filename=filename, status="modified"))
+        for filename in raw.get("removed", []):
+            files.append(CommitFile(filename=filename, status="removed"))
+        return files
+
+    @staticmethod
+    def _extract_branch(ref: str) -> str:
+        """Strip 'refs/heads/' prefix from a git ref string."""
+        prefix = "refs/heads/"
+        return ref[len(prefix):] if ref.startswith(prefix) else ref

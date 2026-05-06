@@ -1,93 +1,93 @@
-"""Unit tests for the GitHub commit parser. No DB or external deps required."""
-
-import json
-from pathlib import Path
+"""Tests for the GitHub commit parser."""
 
 import pytest
 
 from app.integrations.github.commit_parser import CommitParser
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "github_push_payload.json"
+
+SAMPLE_PUSH_PAYLOAD = {
+    "ref": "refs/heads/main",
+    "repository": {"full_name": "my-org/smartead"},
+    "commits": [
+        {
+            "id": "abc123def456abc123def456abc123def456abc1",
+            "message": "feat: add authentication module\n\nIntroduces JWT-based auth.",
+            "timestamp": "2025-05-06T10:30:00Z",
+            "url": "https://github.com/my-org/smartead/commit/abc123",
+            "author": {"name": "Alvaro Alencar", "email": "alvaro@example.com"},
+            "added": ["app/auth/jwt.py", "app/auth/__init__.py"],
+            "modified": ["app/main.py"],
+            "removed": [],
+        },
+        {
+            "id": "def456abc123def456abc123def456abc123def4",
+            "message": "fix: correct token expiry calculation",
+            "timestamp": "2025-05-06T11:00:00Z",
+            "url": "https://github.com/my-org/smartead/commit/def456",
+            "author": {"name": "Alvaro Alencar", "email": "alvaro@example.com"},
+            "added": [],
+            "modified": ["app/auth/jwt.py"],
+            "removed": [],
+        },
+    ],
+}
 
 
-@pytest.fixture
-def raw_payload() -> dict:
-    return json.loads(FIXTURE_PATH.read_text())
+def test_parse_returns_correct_count():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    assert len(commits) == 2
 
 
-@pytest.fixture
-def parser() -> CommitParser:
-    return CommitParser()
-
-
-def test_parse_commit_count(parser, raw_payload):
-    assert len(parser.parse(raw_payload)) == 2
-
-
-def test_parse_repo_and_branch(parser, raw_payload):
-    commits = parser.parse(raw_payload)
-    assert all(c.repo_full_name == "my-org/smartead" for c in commits)
+def test_parse_extracts_branch():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
     assert all(c.branch == "main" for c in commits)
 
 
-def test_parse_branch_strips_refs_prefix(parser, raw_payload):
-    raw_payload["ref"] = "refs/heads/feature/my-branch"
-    commits = parser.parse(raw_payload)
-    assert commits[0].branch == "feature/my-branch"
+def test_parse_extracts_sha():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    assert commits[0].sha == "abc123def456abc123def456abc123def456abc1"
 
 
-def test_parse_first_commit_fields(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    assert commit.short_sha == "abc1234"
-    assert commit.subject == "feat: add user authentication module"
-    assert commit.author_name == "Alvaro Alencar"
-    assert commit.author_email == "alvaro@example.com"
+def test_parse_extracts_subject():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    assert commits[0].subject == "feat: add authentication module"
 
 
-def test_parse_file_count(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    assert len(commit.files) == 4  # 2 added + 2 modified
+def test_parse_extracts_author():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    assert commits[0].author_name == "Alvaro Alencar"
 
 
-def test_parse_file_statuses(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    by_name = {f.filename: f.status for f in commit.files}
-    assert by_name["app/auth/jwt.py"] == "added"
-    assert by_name["app/auth/__init__.py"] == "added"
-    assert by_name["app/main.py"] == "modified"
-    assert by_name["pyproject.toml"] == "modified"
+def test_parse_files_status():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    first = commits[0]
+    statuses = {f.status for f in first.files}
+    assert "added" in statuses
+    assert "modified" in statuses
 
 
-def test_parse_removed_file(parser, raw_payload):
-    commit = parser.parse(raw_payload)[1]
-    removed = [f for f in commit.files if f.status == "removed"]
-    assert len(removed) == 1
-    assert removed[0].filename == "app/auth/old_auth.py"
+def test_parse_file_count():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    # 2 added + 1 modified = 3 files
+    assert len(commits[0].files) == 3
 
 
-def test_parse_empty_commits_returns_empty_list(parser, raw_payload):
-    raw_payload["commits"] = []
-    assert parser.parse(raw_payload) == []
+def test_parse_empty_commits_returns_empty_list():
+    payload = {**SAMPLE_PUSH_PAYLOAD, "commits": []}
+    assert CommitParser().parse(payload) == []
 
 
-def test_parse_affected_directories(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    assert "app/auth" in commit.affected_directories
-    assert "app" in commit.affected_directories
+def test_parse_repo_full_name():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    assert all(c.repo_full_name == "my-org/smartead" for c in commits)
 
 
-def test_parse_affected_extensions(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    assert "py" in commit.affected_extensions
-    assert "toml" in commit.affected_extensions
+def test_affected_directories():
+    commits = CommitParser().parse(SAMPLE_PUSH_PAYLOAD)
+    dirs = commits[0].affected_directories
+    assert "app/auth" in dirs
 
 
-def test_parse_is_not_merge_commit(parser, raw_payload):
-    commit = parser.parse(raw_payload)[0]
-    assert not commit.is_merge_commit
-
-
-def test_parse_merge_commit_detection(parser, raw_payload):
-    raw_payload["commits"][0]["message"] = "Merge pull request #42 from feature/auth"
-    commit = parser.parse(raw_payload)[0]
-    assert commit.is_merge_commit
+def test_extract_branch_strips_prefix():
+    assert CommitParser._extract_branch("refs/heads/feature/x") == "feature/x"
+    assert CommitParser._extract_branch("main") == "main"

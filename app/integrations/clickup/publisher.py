@@ -65,14 +65,14 @@ class ClickUpPublisher:
 
     def _format_for_clickup(self, payload: dict[str, Any]) -> str:
         """Wrap the AI report with a metadata header for ClickUp readability."""
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+        from datetime import datetime, timezone, timedelta
 
         project = payload.get("project_name", "")
         commit_count = payload.get("commit_count", 0)
         trigger = payload.get("trigger", "webhook")
         content = payload.get("content", "")
-        now = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d %H:%M (Brasília)")
+        brasilia = timezone(timedelta(hours=-3))
+        now = datetime.now(brasilia).strftime("%Y-%m-%d %H:%M (Brasília)")
         trigger_label = (
             "scheduled checkpoint"
             if trigger == "scheduled"

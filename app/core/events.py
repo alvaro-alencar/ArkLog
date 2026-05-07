@@ -117,12 +117,8 @@ async def _init_database() -> None:
 
 
 async def _load_projects() -> None:
-    try:
-        from app.config.projects import projects_config
-        count = len(projects_config.projects)
-        logger.info("projects_loaded", count=count, names=[p.name for p in projects_config.projects])
-    except Exception as exc:
-        logger.warning("projects_load_failed", error=str(exc))
+    """Projects are now loaded dynamically from the database."""
+    logger.info("projects_loading_from_db")
 
 
 async def _wire_event_handlers() -> None:
@@ -152,11 +148,11 @@ async def _wire_event_handlers() -> None:
 
 
 async def _start_scheduler() -> None:
-    """Register project schedules and start APScheduler."""
+    """Register project schedules from DB and start APScheduler."""
     try:
         from app.schedulers.report_scheduler import register_project_schedules
         from app.schedulers.scheduler import start_scheduler
-        register_project_schedules()
+        await register_project_schedules()
         await start_scheduler()
     except Exception as exc:
         logger.error("scheduler_start_failed", error=str(exc))

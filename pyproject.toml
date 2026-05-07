@@ -36,6 +36,7 @@ dependencies = [
     "structlog>=24.4.0",
     "python-dotenv>=1.0.1",
     "python-multipart>=0.0.19",
+    "pyjwt[crypto]>=2.10.0",
 ]
 
 [project.optional-dependencies]

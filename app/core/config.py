@@ -33,7 +33,17 @@ class Settings(BaseSettings):
 
     # ── Security ─────────────────────────────────────────────────
     github_webhook_secret: str = Field(default="")
-    github_token: str = Field(default="")  # Personal Access Token for GitHub API (private repos)
+    github_token: str = Field(default="")  # Personal Access Token for GitHub API (legacy/backfill)
+    
+    # GitHub OAuth
+    github_client_id: str = Field(default="")
+    github_client_secret: str = Field(default="")
+    github_redirect_uri: str = Field(default="http://localhost:5173/auth/callback")
+    
+    # JWT
+    jwt_secret: str = Field(default="change-me-in-production")
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7  # 1 week
 
     # ── Database ─────────────────────────────────────────────────
     database_url: str = Field(default="sqlite+aiosqlite:///./data/arklog.db")

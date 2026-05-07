@@ -4,16 +4,13 @@ ArkLog - Commit Service
 Subscriber of "github.push". Orchestrates the commit ingestion pipeline:
   github.push → parse commits → match project → persist → publish commit.batch_ready
 
-Only new (unseen) commits are persisted and forwarded — duplicate push
-events from GitHub are idempotent thanks to the SHA existence check.
+Now fully driven by DB configurations.
 """
 
 from typing import Any
 
 import structlog
 
-from app.config.projects import projects_config
-from app.domain.entities.commit import Commit
 from app.integrations.github.commit_parser import CommitParser
 from app.models.database import AsyncSessionLocal
 from app.repositories.commit_repository import CommitRepository
@@ -32,40 +29,50 @@ class CommitService:
         repo_full_name = payload.get("repository", {}).get("full_name", "unknown")
         log = logger.bind(repo=repo_full_name)
 
-        # 1. Match the incoming repo to a configured project
-        project = projects_config.get_by_repo(repo_full_name)
-        if project is None:
-            log.debug("commit_service_project_not_configured")
-            return
-
-        # 2. Parse commits from the webhook payload
+        # 1. Parse commits from the webhook payload (even if project not found yet)
         commits = self._parser.parse(payload)
         if not commits:
             log.info("commit_service_no_commits")
             return
 
-        # 3. Persist new commits, skip duplicates
-        new_commits: list[Commit] = []
+        # 2. Match the incoming repo to configured projects in the DB
         async with AsyncSessionLocal() as session:
-            async with session.begin():
-                project_repo = ProjectRepository(session)
-                commit_repo = CommitRepository(session)
+            project_repo = ProjectRepository(session)
+            commit_repo = CommitRepository(session)
+            
+            # Find all projects using this repository
+            # (different users might have the same repo monitored with different configs)
+            result = await session.execute(
+                project_repo.select().where(project_repo.model.repo_full_name == repo_full_name)
+            )
+            projects = result.scalars().all()
+            
+            if not projects:
+                log.debug("commit_service_repo_not_monitored")
+                return
 
-                project_record = await project_repo.get_or_create(project)
+            for project in projects:
+                # 3. Persist new commits for this project
+                new_commits_for_project = []
+                async with session.begin_nested():
+                    for commit in commits:
+                        if not await commit_repo.exists_for_project(commit.sha, project.id):
+                            await commit_repo.save_commit(commit, project.id)
+                            new_commits_for_project.append(commit)
+                
+                if not new_commits_for_project:
+                    continue
 
-                for commit in commits:
-                    if await commit_repo.exists(commit.sha):
-                        log.debug("commit_already_processed", sha=commit.short_sha)
-                        continue
-                    await commit_repo.save_commit(commit, project_record.id)
-                    new_commits.append(commit)
+                log.info(
+                    "commits_ingested", 
+                    project=project.name, 
+                    new=len(new_commits_for_project)
+                )
 
-        log.info("commits_ingested", new=len(new_commits), skipped=len(commits) - len(new_commits))
+                # 4. Notify about new commits for daily destinations
+                await self._notify_destinations(project, new_commits_for_project)
 
-        if not new_commits:
-            return
-
-        # 4. Publish one event per daily destination
+    async def _notify_destinations(self, project: Any, new_commits: list[Any]) -> None:
         from app.core.events import event_bus
 
         commit_data = [
@@ -81,17 +88,21 @@ class CommitService:
             for c in new_commits
         ]
 
-        for dest in project.daily_destinations:
+        # Filter daily destinations
+        daily_dests = [d for d in project.destinations if d.schedule == "daily"]
+
+        for dest in daily_dests:
             await event_bus.publish(
                 "commit.batch_ready",
                 {
                     "project_name": project.name,
                     "description": project.description,
-                    "tech_stack": list(project.tech_stack),
+                    "tech_stack": project.tech_stack,
                     "business_context": project.business_context,
-                    "report_style": dest.report_style,
+                    "report_style": dest.report_style or project.report_style,
                     "clickup_task_id": dest.clickup_task_id,
                     "commit_count": len(new_commits),
                     "commits": commit_data,
+                    "trigger": "webhook",
                 },
             )

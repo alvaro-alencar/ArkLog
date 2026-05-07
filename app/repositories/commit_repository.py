@@ -19,10 +19,12 @@ class CommitRepository(BaseRepository[CommitRecord]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, CommitRecord)
 
-    async def exists(self, sha: str) -> bool:
-        """Check if a commit was already processed (idempotency guard)."""
+    async def exists_for_project(self, sha: str, project_id: int) -> bool:
+        """Check if a commit was already processed for this specific project."""
         result = await self._session.execute(
-            select(CommitRecord.id).where(CommitRecord.sha == sha).limit(1)
+            select(CommitRecord.id)
+            .where(CommitRecord.sha == sha, CommitRecord.project_id == project_id)
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 

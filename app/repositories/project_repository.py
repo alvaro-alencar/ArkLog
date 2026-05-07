@@ -1,17 +1,16 @@
 """
 ArkLog - Project Repository
 
-Persists project records and synchronizes them with projects.yaml.
-The get_or_create pattern ensures projects.yaml is always the source
-of truth while maintaining a stable DB identity for foreign keys.
+Handles persistence and retrieval of ProjectRecord.
+Now the source of truth for all project configurations.
 """
 
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.domain.entities.project import Project
 from app.models.tables import ProjectRecord
 from app.repositories.base import BaseRepository
 
@@ -22,29 +21,27 @@ class ProjectRepository(BaseRepository[ProjectRecord]):
 
     async def get_by_name(self, name: str) -> Optional[ProjectRecord]:
         result = await self._session.execute(
-            select(ProjectRecord).where(ProjectRecord.name == name).limit(1)
+            select(ProjectRecord)
+            .where(ProjectRecord.name == name)
+            .options(selectinload(ProjectRecord.destinations))
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
-    async def get_or_create(self, project: Project) -> ProjectRecord:
-        """
-        Return the existing ProjectRecord or create a new one.
-        Called each time a push event arrives to ensure the project
-        exists in the DB before linking commits to it.
-        """
+    async def get_by_repo(self, repo_full_name: str) -> Optional[ProjectRecord]:
+        """Find a project by its GitHub repository name."""
         result = await self._session.execute(
             select(ProjectRecord)
-            .where(ProjectRecord.name == project.name)
-            .limit(1)
+            .where(ProjectRecord.repo_full_name == repo_full_name)
+            .options(selectinload(ProjectRecord.destinations))
         )
-        existing = result.scalar_one_or_none()
-        if existing:
-            return existing
+        # There might be multiple projects using the same repo for different users?
+        # For now, return the first one found or we should filter by user.
+        return result.scalars().first()
 
-        return await self.add(
-            ProjectRecord(
-                name=project.name,
-                repo_full_name=project.repo_full_name,
-                clickup_task_id=project.clickup_task_id,
-            )
+    async def get_all_active(self) -> list[ProjectRecord]:
+        """List all projects with their destinations for the scheduler."""
+        result = await self._session.execute(
+            select(ProjectRecord).options(selectinload(ProjectRecord.destinations))
         )
+        return list(result.scalars().all())

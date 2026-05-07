@@ -45,5 +45,22 @@ class ClickUpClient:
         logger.info("clickup_comment_posted", task_id=task_id, comment_id=comment_id)
         return comment_id
 
+    async def get_teams(self) -> list[dict]:
+        """Get all teams (workspaces) the user has access to."""
+        response = await self._http.get("/team")
+        response.raise_for_status()
+        return response.json().get("teams", [])
+
+    async def get_tasks(self, team_id: str) -> list[dict]:
+        """
+        Get tasks for a team. 
+        Note: ClickUp doesn't have a direct 'get all tasks for team' endpoint without filtering.
+        We'll fetch tasks from the team with some defaults.
+        """
+        # Using the 'Filtered Tasks' endpoint which can work across a team
+        response = await self._http.get(f"/team/{team_id}/task", params={"subtasks": True})
+        response.raise_for_status()
+        return response.json().get("tasks", [])
+
     async def close(self) -> None:
         await self._http.aclose()

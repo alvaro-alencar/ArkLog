@@ -32,21 +32,20 @@ app/integrations/<platform>/
 └── publisher.py   # Subscribes to report.generated
 ```
 
-### 2. Implement the publisher
+### 2. Extend BasePublisher
 
 ```python
 # app/integrations/slack/publisher.py
 from typing import Any
 import structlog
+from app.integrations.base import BasePublisher
 
 logger = structlog.get_logger(__name__)
 
-class SlackPublisher:
+class SlackPublisher(BasePublisher):
     async def handle_report_generated(self, payload: dict[str, Any]) -> None:
         project = payload.get("project_name", "")
         content = payload.get("content", "")
-        webhook_url = payload.get("slack_webhook_url", "")  # from config or payload
-
         # format and post to Slack
         logger.info("slack_report_posted", project=project)
 
@@ -61,6 +60,7 @@ class SlackPublisher:
 from app.integrations.slack.publisher import SlackPublisher
 
 slack_pub = SlackPublisher()
+_publishers.append(slack_pub)  # ensures close() is called on shutdown
 event_bus.subscribe("report.generated", slack_pub.handle_report_generated)
 ```
 

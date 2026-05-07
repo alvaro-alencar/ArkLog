@@ -6,6 +6,7 @@ Each subdirectory is a self-contained adapter for one external platform. ArkLog'
 
 ```
 integrations/
+├── base.py          # BasePublisher ABC — implement this to add any new destination
 ├── github/          # Source: reads commits via webhook and REST API
 │   ├── api_client.py        # GitHub REST API — fetches commit history (backfill)
 │   ├── commit_parser.py     # Parses raw webhook push payload into Commit entities
@@ -13,7 +14,7 @@ integrations/
 │
 └── clickup/         # Destination: posts reports as task comments
     ├── client.py            # Async HTTP wrapper for ClickUp API v2
-    └── publisher.py         # Subscribes to report.generated, formats and posts
+    └── publisher.py         # Implements BasePublisher; subscribes to report.generated
 ```
 
 ---
@@ -21,34 +22,40 @@ integrations/
 ## Adding a New Publisher (e.g. Slack, Notion, Linear)
 
 1. Create a new directory: `app/integrations/<platform>/`
-2. Implement the publisher class:
+2. Extend `BasePublisher`:
 
 ```python
 # app/integrations/slack/publisher.py
 from typing import Any
+import structlog
+from app.integrations.base import BasePublisher
 
-class SlackPublisher:
+logger = structlog.get_logger(__name__)
+
+class SlackPublisher(BasePublisher):
     async def handle_report_generated(self, payload: dict[str, Any]) -> None:
-        # format and send to Slack
-        ...
+        project = payload.get("project_name", "")
+        content = payload.get("content", "")
+        # format and post to Slack
+        logger.info("slack_report_posted", project=project)
 
     async def close(self) -> None:
-        # close HTTP session
-        ...
+        pass  # close HTTP session if applicable
 ```
 
-3. Register it in `app/core/events.py`:
+3. Register it in `app/core/events.py` inside `_wire_event_handlers()`:
 
 ```python
 from app.integrations.slack.publisher import SlackPublisher
 
 slack_pub = SlackPublisher()
+_publishers.append(slack_pub)
 event_bus.subscribe("report.generated", slack_pub.handle_report_generated)
 ```
 
 4. Add any required config fields to `app/core/config.py` and `.env.example`.
 
-> The `report.generated` event payload contains: `project_name`, `content`, `summary`, `commit_count`, `trigger`, `clickup_task_id` (or equivalent destination ID). Your publisher reads what it needs and ignores the rest.
+> **Payload reference** — `report.generated` provides: `project_name`, `content` (Markdown), `summary`, `commit_count`, `trigger` (`webhook` | `daily_scheduled` | `weekly_scheduled` | `backfill`), `report_id`, `clickup_task_id`. Your publisher reads what it needs and ignores the rest.
 
 ---
 

@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 
 from app.core.config import settings
+from app.integrations.base import BasePublisher
 from app.integrations.clickup.client import ClickUpClient
 from app.models.database import AsyncSessionLocal
 from app.models.tables import ReportRecord
@@ -20,7 +21,7 @@ from app.utils.datetime_utils import naive_utcnow
 logger = structlog.get_logger(__name__)
 
 
-class ClickUpPublisher:
+class ClickUpPublisher(BasePublisher):
     """Publishes generated reports to ClickUp tasks as comments."""
 
     def __init__(self) -> None:

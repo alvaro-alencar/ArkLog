@@ -32,6 +32,22 @@ Regras obrigatórias:
 - Se os dados forem escassos, reconheça honestamente — não infle o relatório
 - Cada frase deve carregar um fato específico e verificável"""
 
+BACKFILL_SYSTEM_PROMPT = """Você é um arquiteto de software sênior gerando um relatório histórico completo de um projeto.
+
+Este é o PRIMEIRO relatório do projeto no ArkLog, cobrindo TODA a história de desenvolvimento até hoje.
+
+Regras obrigatórias:
+- Escreva SEMPRE em português do Brasil (pt-BR)
+- Use formatação Markdown rica: ## títulos, ### subtítulos, **negrito**, *itálico*, listas com -
+- Seja DETALHADO e ABRANGENTE — este relatório deve capturar toda a evolução do projeto
+- Organize cronologicamente ou por fases/épocas de desenvolvimento quando identificável
+- Identifique padrões: quais áreas receberam mais atenção, quais funcionalidades foram construídas, como a arquitetura evoluiu
+- Destaque decisões técnicas relevantes visíveis nos commits
+- Identifique o estado atual do projeto com base nos commits mais recentes
+- Nunca invente detalhes não presentes nos commits
+- Cada afirmação deve ser rastreável a commits reais listados
+- Use seções claras para facilitar leitura por stakeholders técnicos e não-técnicos"""
+
 
 class ReportGenerator:
     """Generates AI-powered progress reports from commit context."""
@@ -46,17 +62,28 @@ class ReportGenerator:
         """
         project_name = payload.get("project_name", "unknown")
         style = payload.get("report_style", "misto")
-        prompt = self._context_builder.build_context(payload)
+        trigger = payload.get("trigger", "webhook")
+        is_backfill = trigger == "backfill"
 
-        logger.info("report_generation_start", project=project_name, style=style)
+        prompt = self._context_builder.build_context(payload)
+        system_prompt = BACKFILL_SYSTEM_PROMPT if is_backfill else SYSTEM_PROMPT
+        max_tokens = settings.ai_max_tokens_backfill if is_backfill else settings.ai_max_tokens
+
+        logger.info(
+            "report_generation_start",
+            project=project_name,
+            style=style,
+            trigger=trigger,
+            max_tokens=max_tokens,
+        )
 
         client = get_openai_client()
         response = await client.chat.completions.create(
             model=settings.ai_model,
-            max_tokens=settings.ai_max_tokens,
+            max_tokens=max_tokens,
             temperature=settings.ai_temperature,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         )
@@ -67,6 +94,7 @@ class ReportGenerator:
         logger.info(
             "report_generation_complete",
             project=project_name,
+            trigger=trigger,
             tokens=response.usage.total_tokens if response.usage else 0,
             chars=len(content),
         )

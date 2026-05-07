@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     ai_base_url: str = Field(default="https://openrouter.ai/api/v1")
     ai_model: str = Field(default="google/gemini-2.5-flash")
     ai_max_tokens: int = Field(default=2000)
+    ai_max_tokens_backfill: int = Field(default=8000)
     ai_temperature: float = Field(default=0.3)
 
     # ── ClickUp ──────────────────────────────────────────────────

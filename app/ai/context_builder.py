@@ -53,13 +53,15 @@ class ContextBuilder:
     def _build_executive(self, payload: dict[str, Any]) -> str:
         template = self._load_template("report_executive.md")
         commits = payload.get("commits", [])
+        is_backfill = payload.get("trigger") == "backfill"
+        period = "histórico completo do projeto (todos os commits)" if is_backfill else "janela de atividade recente"
         return template.format(
             project_name=payload.get("project_name", ""),
             project_description=payload.get("description", "Not specified"),
             tech_stack=", ".join(payload.get("tech_stack", [])) or "Not specified",
             business_context=payload.get("business_context", "Not specified"),
-            period_start="recent activity window",
-            period_end="now",
+            period_start=period,
+            period_end="hoje",
             commit_count=payload.get("commit_count", 0),
             files_changed=sum(c.get("files_changed", 0) for c in commits),
             directories=", ".join(sorted(self._unique_directories(commits))) or "root",
@@ -69,11 +71,13 @@ class ContextBuilder:
     def _build_technical(self, payload: dict[str, Any]) -> str:
         template = self._load_template("report_technical.md")
         commits = payload.get("commits", [])
+        is_backfill = payload.get("trigger") == "backfill"
+        period = "histórico completo do projeto (todos os commits)" if is_backfill else "janela de atividade recente"
         return template.format(
             project_name=payload.get("project_name", ""),
             tech_stack=", ".join(payload.get("tech_stack", [])) or "Not specified",
-            period_start="recent activity window",
-            period_end="now",
+            period_start=period,
+            period_end="hoje",
             commit_count=payload.get("commit_count", 0),
             commit_details=self._format_details(commits),
         )

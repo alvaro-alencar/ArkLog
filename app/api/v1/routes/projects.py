@@ -8,7 +8,7 @@ GET /projects/{name}/timeline?days=N  — daily activity over the last N days
 from datetime import timedelta
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from app.config.projects import projects_config
@@ -84,6 +84,23 @@ async def list_projects() -> ProjectListResponse:
         )
 
     return ProjectListResponse(count=len(summaries), projects=summaries)
+
+
+@router.post("/projects/{name}/backfill", status_code=status.HTTP_202_ACCEPTED)
+async def backfill_project(name: str, background_tasks: BackgroundTasks) -> dict:
+    """
+    Fetch all historical commits from GitHub for a project and generate
+    a comprehensive report covering the entire history.
+    Runs in background — returns immediately with 202.
+    """
+    from app.services.backfill_service import backfill_project as _backfill
+
+    project = projects_config.get_by_name(name)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{name}' not found")
+
+    background_tasks.add_task(_backfill, name)
+    return {"status": "accepted", "project": name, "message": "Backfill started — report will be posted to ClickUp when ready."}
 
 
 @router.get("/projects/{name}/timeline", response_model=TimelineResponse)

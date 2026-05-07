@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # ── Security ─────────────────────────────────────────────────
     github_webhook_secret: str = Field(default="")
+    github_token: str = Field(default="")  # Personal Access Token for GitHub API (private repos)
 
     # ── Database ─────────────────────────────────────────────────
     database_url: str = Field(default="sqlite+aiosqlite:///./data/arklog.db")

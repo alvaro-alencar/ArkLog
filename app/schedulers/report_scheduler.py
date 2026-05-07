@@ -3,12 +3,13 @@ ArkLog - Report Schedule Registration
 
 Registers one cron job per project per ReportDestination from projects.yaml.
 
-  daily  → fires at each HH:MM in dest.times
-  weekly → fires at dest.time on dest.day (e.g. friday 18:00)
+  daily  → fires at each HH:MM in dest.times  (trigger: "daily_scheduled")
+  weekly → fires at dest.time on dest.day      (trigger: "weekly_scheduled")
 
-For weekly destinations (window_days > 0), the job fetches commits from
-the past N days out of the DB before generating the report, so the AI
-has real data instead of an empty context.
+Continuidade: cada relatório começa do ponto onde o anterior terminou.
+O scheduler consulta o generated_at do último relatório com o mesmo trigger
+e busca apenas commits mais novos que esse timestamp — sem janelas fixas,
+sem gaps, sem duplicatas entre relatórios consecutivos.
 """
 
 import structlog
@@ -19,12 +20,12 @@ from app.schedulers.scheduler import scheduler
 
 logger = structlog.get_logger(__name__)
 
+TRIGGER_DAILY = "daily_scheduled"
+TRIGGER_WEEKLY = "weekly_scheduled"
+
 
 def register_project_schedules() -> None:
-    """
-    Register cron jobs for all destinations in all projects.
-    replace_existing=True makes this idempotent on restart.
-    """
+    """Register cron jobs for all destinations in all projects."""
     job_count = 0
     for project in projects_config.projects:
         for dest in project.reports:
@@ -38,17 +39,12 @@ def register_project_schedules() -> None:
                         hour=hour,
                         minute=minute,
                         id=job_id,
-                        args=[project, dest],
+                        args=[project, dest, TRIGGER_DAILY],
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
                     job_count += 1
-                    logger.debug(
-                        "schedule_job_registered",
-                        project=project.name,
-                        dest=dest.label,
-                        time=time_str,
-                    )
+                    logger.debug("schedule_job_registered", project=project.name, dest=dest.label, time=time_str)
 
             elif dest.schedule == "weekly":
                 hour, minute = map(int, dest.time.split(":"))
@@ -56,79 +52,81 @@ def register_project_schedules() -> None:
                 scheduler.add_job(
                     _run_scheduled_report,
                     trigger="cron",
-                    day_of_week=dest.day[:3],  # APScheduler: "mon", "fri", etc.
+                    day_of_week=dest.day[:3],
                     hour=hour,
                     minute=minute,
                     id=job_id,
-                    args=[project, dest],
+                    args=[project, dest, TRIGGER_WEEKLY],
                     replace_existing=True,
-                    misfire_grace_time=3600,   # 1h grace for weekly jobs
+                    misfire_grace_time=3600,
                 )
                 job_count += 1
-                logger.debug(
-                    "schedule_job_registered",
-                    project=project.name,
-                    dest=dest.label,
-                    day=dest.day,
-                    time=dest.time,
-                )
+                logger.debug("schedule_job_registered", project=project.name, dest=dest.label, day=dest.day, time=dest.time)
 
-    logger.info(
-        "schedules_registered",
-        total_jobs=job_count,
-        projects=len(projects_config.projects),
-    )
+    logger.info("schedules_registered", total_jobs=job_count, projects=len(projects_config.projects))
 
 
-async def _run_scheduled_report(project: Project, dest: ReportDestination) -> None:
+async def _run_scheduled_report(project: Project, dest: ReportDestination, trigger: str) -> None:
     """
-    Fire a report for one destination.
-    If dest.window_days > 0, fetches real commits from the DB for that period.
-    If window_days == 0, sends an empty commit list so the AI generates a
-    contextual status report from project description and tech stack alone.
+    Gera relatório para um destino.
+
+    Continuidade: busca o generated_at do último relatório com o mesmo trigger.
+    Commits desde esse ponto são incluídos no novo relatório.
+    Se nunca houve relatório anterior, inclui todos os commits do DB.
+    Se não há commits novos, a IA infere o estado atual pelo contexto do projeto.
     """
+    from datetime import datetime, timezone
+
     from app.core.events import event_bus
+    from app.models.database import AsyncSessionLocal
+    from app.repositories.commit_repository import CommitRepository
+    from app.repositories.project_repository import ProjectRepository
+    from app.repositories.report_repository import ReportRepository
 
-    logger.info("scheduled_report_fired", project=project.name, dest=dest.label)
+    logger.info("scheduled_report_fired", project=project.name, dest=dest.label, trigger=trigger)
 
     commits: list[dict] = []
     commit_count = 0
 
-    if dest.window_days > 0:
-        from datetime import datetime, timedelta, timezone
+    async with AsyncSessionLocal() as session:
+        proj_repo = ProjectRepository(session)
+        proj_record = await proj_repo.get_by_name(project.name)
 
-        from app.models.database import AsyncSessionLocal
-        from app.repositories.commit_repository import CommitRepository
-        from app.repositories.project_repository import ProjectRepository
-
-        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=dest.window_days)
-
-        async with AsyncSessionLocal() as session:
-            proj_repo = ProjectRepository(session)
+        if proj_record:
+            report_repo = ReportRepository(session)
             commit_repo = CommitRepository(session)
-            proj_record = await proj_repo.get_by_name(project.name)
-            if proj_record:
-                records = await commit_repo.get_since(proj_record.id, since)
-                commits = [
-                    {
-                        "sha": r.sha,
-                        "short_sha": r.sha[:7],
-                        "subject": r.message.split("\n")[0],
-                        "author": r.author_name,
-                        "files_changed": r.files_changed,
-                        "directories": [],
-                        "extensions": [],
-                    }
-                    for r in records
-                ]
-                commit_count = len(commits)
-                logger.info(
-                    "scheduled_commits_fetched",
-                    project=project.name,
-                    dest=dest.label,
-                    window_days=dest.window_days,
-                    commits=commit_count,
-                )
+
+            # Ponto de continuidade: último relatório com este mesmo trigger
+            last_at = await report_repo.get_last_generated_at_for_trigger(proj_record.id, trigger)
+
+            if last_at is not None:
+                since = last_at
+            else:
+                # Primeiro relatório deste tipo — inclui tudo que está no DB
+                since = datetime(2000, 1, 1)
+
+            records = await commit_repo.get_since(proj_record.id, since)
+            commits = [
+                {
+                    "sha": r.sha,
+                    "short_sha": r.sha[:7],
+                    "subject": r.message.split("\n")[0],
+                    "author": r.author_name,
+                    "files_changed": r.files_changed,
+                    "directories": [],
+                    "extensions": [],
+                }
+                for r in records
+            ]
+            commit_count = len(commits)
+
+            logger.info(
+                "scheduled_commits_fetched",
+                project=project.name,
+                trigger=trigger,
+                since=str(last_at),
+                commits=commit_count,
+            )
 
     await event_bus.publish(
         "commit.batch_ready",
@@ -141,6 +139,6 @@ async def _run_scheduled_report(project: Project, dest: ReportDestination) -> No
             "clickup_task_id": dest.clickup_task_id,
             "commit_count": commit_count,
             "commits": commits,
-            "trigger": "scheduled",
+            "trigger": trigger,
         },
     )

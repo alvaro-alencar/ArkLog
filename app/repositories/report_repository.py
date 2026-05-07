@@ -50,6 +50,18 @@ class ReportRepository(BaseRepository[ReportRecord]):
     async def get_by_id(self, report_id: int) -> Optional[ReportRecord]:
         return await self._session.get(ReportRecord, report_id)
 
+    async def get_last_generated_at_for_trigger(
+        self, project_id: int, trigger: str
+    ) -> Optional[datetime]:
+        """Return the generated_at of the most recent report with this trigger type."""
+        result = await self._session.execute(
+            select(func.max(ReportRecord.generated_at)).where(
+                ReportRecord.project_id == project_id,
+                ReportRecord.trigger == trigger,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_since(self, project_id: int, since: datetime) -> list[ReportRecord]:
         result = await self._session.execute(
             select(ReportRecord)

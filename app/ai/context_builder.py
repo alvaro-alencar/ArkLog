@@ -15,6 +15,15 @@ import structlog
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
+_PERIOD_LABELS = {
+    "backfill": "histórico completo do projeto (todos os commits)",
+    "weekly_scheduled": "semana completa (desde o último relatório semanal)",
+    "daily_scheduled": "período desde o último relatório diário",
+}
+
+def _period_label(trigger: str) -> str:
+    return _PERIOD_LABELS.get(trigger, "atividade recente")
+
 logger = structlog.get_logger(__name__)
 
 _FALLBACK_TEMPLATES: dict[str, str] = {
@@ -53,8 +62,7 @@ class ContextBuilder:
     def _build_executive(self, payload: dict[str, Any]) -> str:
         template = self._load_template("report_executive.md")
         commits = payload.get("commits", [])
-        is_backfill = payload.get("trigger") == "backfill"
-        period = "histórico completo do projeto (todos os commits)" if is_backfill else "janela de atividade recente"
+        period = _period_label(payload.get("trigger", "webhook"))
         return template.format(
             project_name=payload.get("project_name", ""),
             project_description=payload.get("description", "Not specified"),
@@ -71,8 +79,7 @@ class ContextBuilder:
     def _build_technical(self, payload: dict[str, Any]) -> str:
         template = self._load_template("report_technical.md")
         commits = payload.get("commits", [])
-        is_backfill = payload.get("trigger") == "backfill"
-        period = "histórico completo do projeto (todos os commits)" if is_backfill else "janela de atividade recente"
+        period = _period_label(payload.get("trigger", "webhook"))
         return template.format(
             project_name=payload.get("project_name", ""),
             tech_stack=", ".join(payload.get("tech_stack", [])) or "Not specified",

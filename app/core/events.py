@@ -8,26 +8,29 @@ Two responsibilities:
 Complete event topology (add new subscribers here as phases expand):
   github.push         → CommitService.handle_push_event         [Phase 2]
   commit.batch_ready  → ReportService.handle_commit_batch        [Phase 3]
-  report.generated    → ClickUpPublisher.handle_report_generated [Phase 4]
+  report.generated    → <publisher>.handle_report_generated      [Phase 4+]
   schedule (cron)     → _run_scheduled_report (per project)      [Phase 5]
+
+To add a new publisher: implement BasePublisher, instantiate it in
+_wire_event_handlers(), append to _publishers, and subscribe to the event bus.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 import structlog
 
 if TYPE_CHECKING:
-    from app.integrations.clickup.publisher import ClickUpPublisher
+    from app.integrations.base import BasePublisher
 
 logger = structlog.get_logger(__name__)
 
 EventHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
-_clickup_pub: Optional["ClickUpPublisher"] = None
+_publishers: list["BasePublisher"] = []
 
 
 class EventBus:
@@ -81,14 +84,16 @@ async def on_startup() -> None:
 
 
 async def on_shutdown() -> None:
-    """Graceful shutdown — stop scheduler and close HTTP clients before process exits."""
-    global _clickup_pub
+    """Graceful shutdown — stop scheduler and close all publisher HTTP clients."""
+    global _publishers
     logger.info("shutdown_begin")
     from app.schedulers.scheduler import stop_scheduler
     await stop_scheduler()
-    if _clickup_pub is not None:
-        await _clickup_pub.close()
-        logger.info("clickup_client_closed")
+    for pub in _publishers:
+        await pub.close()
+    if _publishers:
+        logger.info("publishers_closed", count=len(_publishers))
+    _publishers.clear()
     logger.info("shutdown_complete")
 
 
@@ -123,22 +128,27 @@ async def _load_projects() -> None:
 async def _wire_event_handlers() -> None:
     """
     Register all event bus subscriptions.
-    This is the single place where the full event topology is visible.
+
+    This is the single source of truth for the full event topology.
+    To add a publisher: import it, instantiate, append to _publishers,
+    and subscribe to "report.generated".
     """
-    global _clickup_pub
+    global _publishers
     from app.integrations.clickup.publisher import ClickUpPublisher
     from app.services.commit_service import CommitService
     from app.services.report_service import ReportService
 
     commit_svc = CommitService()
     report_svc = ReportService()
-    _clickup_pub = ClickUpPublisher()
+
+    clickup_pub = ClickUpPublisher()
+    _publishers.append(clickup_pub)
 
     event_bus.subscribe("github.push", commit_svc.handle_push_event)
     event_bus.subscribe("commit.batch_ready", report_svc.handle_commit_batch)
-    event_bus.subscribe("report.generated", _clickup_pub.handle_report_generated)
+    event_bus.subscribe("report.generated", clickup_pub.handle_report_generated)
 
-    logger.info("event_handlers_wired", subscriptions=3)
+    logger.info("event_handlers_wired", publishers=len(_publishers), subscriptions=3)
 
 
 async def _start_scheduler() -> None:

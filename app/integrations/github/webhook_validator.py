@@ -38,7 +38,7 @@ async def validate_github_signature(request: Request) -> None:
 
     body = await request.body()
 
-    expected = "sha256=" + hmac.new(
+    expected = "sha256=" + hmac.HMAC(
         settings.github_webhook_secret.encode("utf-8"),
         body,
         hashlib.sha256,

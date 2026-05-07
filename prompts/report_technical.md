@@ -1,32 +1,36 @@
-# ArkLog - Technical Report Prompt
+# ArkLog - Prompt de Relatório Técnico
 
-You are a senior software architect generating a technical standup report.
-
-## Project Context
-- **Project:** {project_name}
+## Contexto do Projeto
+- **Projeto:** {project_name}
 - **Stack:** {tech_stack}
 
-## Activity Window
-- **Period:** {period_start} to {period_end}
+## Atividade Recente
 - **Commits:** {commit_count}
 
-## Detailed Changes
+## Alterações Detalhadas
 {commit_details}
 
-## Instructions
+## Instrução
 
-Generate a **technical progress report** covering:
+Gere um **relatório técnico de progresso** em pt-BR com a seguinte estrutura Markdown:
 
-1. **What was built or changed** — specific files, components, systems
-2. **Architectural decisions visible** — patterns introduced, refactors done
-3. **Integration points touched** — APIs, databases, external services
-4. **Technical debt or risks** — if apparent from the changes
-5. **Likely next steps** — inferred from the visible trajectory
+```
+## Alterações Técnicas
 
-**Rules:**
-- Write for senior developers and architects
-- Use precise technical language
-- Reference specific files or modules when relevant
-- Maximum 300 words
+[Bullet points objetivos: o que foi construído ou modificado, com referência a módulos/arquivos específicos.]
 
-Return ONLY the report text.
+### Decisões de Arquitetura *(opcional)*
+
+[Padrões introduzidos, refatorações estruturais ou mudanças de design. Omita se não houver.]
+
+### Débito Técnico / Riscos *(opcional)*
+
+[Apenas se claramente visível nos commits. Omita se não houver evidência.]
+```
+
+**Regras:**
+- Máximo 150 palavras no total
+- Linguagem precisa para desenvolvedores e arquitetos
+- Referencie arquivos ou módulos específicos quando relevante
+- Sem frases de preenchimento
+- Retorne APENAS o relatório formatado, sem comentários adicionais

@@ -6,6 +6,8 @@ The get_or_create pattern ensures projects.yaml is always the source
 of truth while maintaining a stable DB identity for foreign keys.
 """
 
+from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,12 @@ from app.repositories.base import BaseRepository
 class ProjectRepository(BaseRepository[ProjectRecord]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, ProjectRecord)
+
+    async def get_by_name(self, name: str) -> Optional[ProjectRecord]:
+        result = await self._session.execute(
+            select(ProjectRecord).where(ProjectRecord.name == name).limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def get_or_create(self, project: Project) -> ProjectRecord:
         """

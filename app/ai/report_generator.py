@@ -4,10 +4,11 @@ ArkLog - AI Report Generator
 Calls the configured AI model (OpenAI / OpenRouter) with the assembled
 prompt context and returns the generated report content.
 
-Anti-hallucination measures:
-- Temperature 0.3: factual, grounded, low creativity
-- System prompt explicitly forbids inventing details
-- Context builder only injects observed data (never inferred)
+Triggers e comportamento:
+  webhook          → relatório conciso dos commits do push
+  daily_scheduled  → relatório diário; infere fase se sem commits
+  weekly_scheduled → relatório semanal detalhado da semana
+  backfill         → análise histórica abrangente de todo o projeto
 """
 
 from typing import Any
@@ -20,15 +21,53 @@ from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
-SYSTEM_PROMPT = """You are a senior technical program manager generating software project progress reports.
+_PROMPT_BASE = """Você é um gerente técnico sênior gerando relatórios de progresso de projetos de software.
 
-Critical rules:
-- Only describe what is explicitly present in the provided commit data
-- Never invent file names, features, or technical details not mentioned in the context
-- Be specific and concrete — avoid phrases like \"making progress\" or \"various improvements\"
-- Write as an experienced engineering manager communicating to business stakeholders
-- If data is sparse or absent, acknowledge it honestly rather than padding the report
-- Maximum density of information per sentence: every sentence must carry a specific fact"""
+Regras obrigatórias:
+- Escreva SEMPRE em português do Brasil (pt-BR)
+- Use formatação Markdown: ## para títulos, ### para subtítulos, **negrito** para destaques, *itálico* para ênfase
+- Descreva apenas o que está explicitamente presente nos dados fornecidos
+- Nunca invente arquivos, funcionalidades ou detalhes técnicos não mencionados
+- Evite frases genéricas ("progresso sendo feito", "melhorias diversas", "avanços significativos")
+- Cada frase deve carregar um fato específico e verificável
+
+Quando não há commits no período:
+- Se o contexto ou descrição do projeto oferecem evidências claras do estado atual \
+(ex: aguardando aprovação de loja, em fase de testes, em revisão por terceiros, em planejamento documentado), \
+descreva esse estado com confiança — é uma inferência justa e útil
+- Se não há evidências suficientes para uma inferência segura, informe objetivamente: \
+"O projeto encontra-se em fase de planejamento e definição de novas tarefas neste período\""""
+
+SYSTEM_PROMPT = _PROMPT_BASE + """
+
+- Seja CONCISO — corte toda frase que não adiciona informação nova. Máximo 150 palavras."""
+
+WEEKLY_SYSTEM_PROMPT = _PROMPT_BASE + """
+
+- Seja DETALHADO — este é o relatório semanal que será revisado antes de ir ao contratante
+- Organize por área ou tema quando houver múltiplos commits em domínios diferentes
+- Destaque o que foi concluído, o que está em andamento e o que pode estar pendente
+- Máximo 400 palavras"""
+
+BACKFILL_SYSTEM_PROMPT = """Você é um arquiteto de software sênior gerando um relatório histórico completo de um projeto.
+
+Este é o PRIMEIRO relatório do projeto no ArkLog, cobrindo TODA a história de desenvolvimento até hoje.
+
+Regras obrigatórias:
+- Escreva SEMPRE em português do Brasil (pt-BR)
+- Use formatação Markdown rica: ## títulos, ### subtítulos, **negrito**, *itálico*, listas com -
+- Seja DETALHADO e ABRANGENTE — capture toda a evolução do projeto
+- Organize cronologicamente ou por fases/épocas quando identificável
+- Identifique padrões: áreas com mais atenção, funcionalidades construídas, evolução da arquitetura
+- Destaque decisões técnicas relevantes visíveis nos commits
+- Descreva o estado atual com base nos commits mais recentes
+- Nunca invente detalhes não presentes nos commits
+- Cada afirmação rastreável a commits reais"""
+
+_PROMPTS = {
+    "backfill": (BACKFILL_SYSTEM_PROMPT, "ai_max_tokens_backfill"),
+    "weekly_scheduled": (WEEKLY_SYSTEM_PROMPT, "ai_max_tokens_backfill"),
+}
 
 
 class ReportGenerator:
@@ -44,17 +83,28 @@ class ReportGenerator:
         """
         project_name = payload.get("project_name", "unknown")
         style = payload.get("report_style", "misto")
+        trigger = payload.get("trigger", "webhook")
+
+        system_prompt, tokens_attr = _PROMPTS.get(trigger, (SYSTEM_PROMPT, "ai_max_tokens"))
+        max_tokens = getattr(settings, tokens_attr)
+
         prompt = self._context_builder.build_context(payload)
 
-        logger.info("report_generation_start", project=project_name, style=style)
+        logger.info(
+            "report_generation_start",
+            project=project_name,
+            style=style,
+            trigger=trigger,
+            max_tokens=max_tokens,
+        )
 
         client = get_openai_client()
         response = await client.chat.completions.create(
-            model=settings.openai_model,
-            max_tokens=settings.openai_max_tokens,
-            temperature=settings.openai_temperature,
+            model=settings.ai_model,
+            max_tokens=max_tokens,
+            temperature=settings.ai_temperature,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         )
@@ -65,6 +115,7 @@ class ReportGenerator:
         logger.info(
             "report_generation_complete",
             project=project_name,
+            trigger=trigger,
             tokens=response.usage.total_tokens if response.usage else 0,
             chars=len(content),
         )

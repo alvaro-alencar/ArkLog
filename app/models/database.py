@@ -5,6 +5,8 @@ Configures SQLAlchemy async engine. SQLite is used initially (zero ops overhead)
 Migrating to PostgreSQL requires only changing DATABASE_URL — SQLAlchemy handles the rest.
 """
 
+from typing import AsyncGenerator
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -39,7 +41,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields a database session."""
     async with AsyncSessionLocal() as session:
         yield session

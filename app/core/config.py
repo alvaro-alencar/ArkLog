@@ -28,19 +28,25 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     api_prefix: str = "/api/v1"
 
+    # ── CORS ─────────────────────────────────────────────────────
+    cors_origins: list[str] = Field(default=["*"])
+
     # ── Security ─────────────────────────────────────────────────
     github_webhook_secret: str = Field(default="")
+    github_token: str = Field(default="")  # Personal Access Token for GitHub API (private repos)
 
     # ── Database ─────────────────────────────────────────────────
     database_url: str = Field(default="sqlite+aiosqlite:///./data/arklog.db")
 
     # ── AI Provider ──────────────────────────────────────────────
-    # Compatible with OpenAI API format — works with OpenRouter by changing base_url
-    openai_api_key: str = Field(default="")
-    openai_base_url: str = Field(default="https://api.openai.com/v1")
-    openai_model: str = Field(default="gpt-4o")
-    openai_max_tokens: int = Field(default=2000)
-    openai_temperature: float = Field(default=0.3)
+    # Compatible with any OpenAI-format API (OpenRouter, OpenAI, etc.)
+    # Env vars: AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MAX_TOKENS, AI_TEMPERATURE
+    ai_api_key: str = Field(default="")
+    ai_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    ai_model: str = Field(default="google/gemini-2.5-flash")
+    ai_max_tokens: int = Field(default=2000)
+    ai_max_tokens_backfill: int = Field(default=8000)
+    ai_temperature: float = Field(default=0.3)
 
     # ── ClickUp ──────────────────────────────────────────────────
     clickup_api_token: str = Field(default="")
@@ -49,6 +55,13 @@ class Settings(BaseSettings):
 
     # ── Projects ─────────────────────────────────────────────────
     projects_config_path: str = Field(default="projects.yaml")
+
+    # ── Scheduler ────────────────────────────────────────────────
+    # Set SCHEDULER_ENABLED=false on replica containers to prevent duplicate reports
+    scheduler_enabled: bool = Field(default=True)
+
+    # ── Webhook ──────────────────────────────────────────────────
+    max_commits_per_webhook: int = Field(default=50)
 
     # ── Logging ──────────────────────────────────────────────────
     log_level: str = Field(default="INFO")

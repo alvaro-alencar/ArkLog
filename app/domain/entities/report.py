@@ -10,6 +10,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from app.utils.datetime_utils import naive_utcnow
+
 
 class ReportStatus(str, Enum):
     PENDING = "pending"
@@ -35,7 +37,7 @@ class Report:
 
     project_name: str
     trigger: ReportTrigger
-    generated_at: datetime = field(default_factory=datetime.utcnow)
+    generated_at: datetime = field(default_factory=naive_utcnow)
     status: ReportStatus = ReportStatus.PENDING
 
     content: str = ""   # Full AI-generated report
@@ -55,7 +57,7 @@ class Report:
 
     def mark_published(self, clickup_comment_id: str) -> None:
         self.clickup_comment_id = clickup_comment_id
-        self.published_at = datetime.utcnow()
+        self.published_at = naive_utcnow()
         self.status = ReportStatus.PUBLISHED
 
     def mark_failed(self) -> None:

@@ -65,30 +65,33 @@ class CommitService:
         if not new_commits:
             return
 
-        # 4. Publish enriched payload for the AI engine (Phase 3)
+        # 4. Publish one event per daily destination
         from app.core.events import event_bus
 
-        await event_bus.publish(
-            "commit.batch_ready",
+        commit_data = [
             {
-                "project_name": project.name,
-                "description": project.description,
-                "tech_stack": list(project.tech_stack),
-                "business_context": project.business_context,
-                "report_style": project.report_style,
-                "clickup_task_id": project.clickup_task_id,
-                "commit_count": len(new_commits),
-                "commits": [
-                    {
-                        "sha": c.sha,
-                        "short_sha": c.short_sha,
-                        "subject": c.subject,
-                        "author": c.author_name,
-                        "files_changed": len(c.files),
-                        "directories": sorted(c.affected_directories),
-                        "extensions": sorted(c.affected_extensions),
-                    }
-                    for c in new_commits
-                ],
-            },
-        )
+                "sha": c.sha,
+                "short_sha": c.short_sha,
+                "subject": c.subject,
+                "author": c.author_name,
+                "files_changed": len(c.files),
+                "directories": sorted(c.affected_directories),
+                "extensions": sorted(c.affected_extensions),
+            }
+            for c in new_commits
+        ]
+
+        for dest in project.daily_destinations:
+            await event_bus.publish(
+                "commit.batch_ready",
+                {
+                    "project_name": project.name,
+                    "description": project.description,
+                    "tech_stack": list(project.tech_stack),
+                    "business_context": project.business_context,
+                    "report_style": dest.report_style,
+                    "clickup_task_id": dest.clickup_task_id,
+                    "commit_count": len(new_commits),
+                    "commits": commit_data,
+                },
+            )

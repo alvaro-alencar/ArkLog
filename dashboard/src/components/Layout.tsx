@@ -2,9 +2,11 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, FileText, Settings, LogOut, User } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSettings } from '../contexts/SettingsContext';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
+  const { t } = useSettings();
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -17,32 +19,29 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       {/* Sidebar */}
       <aside className="w-64 border-r border-border flex flex-col fixed h-full bg-black">
         <div className="p-6">
-          <h1 className="text-2xl font-bold tracking-tighter">ArkLog</h1>
+          <img src="/logo_arklog.png" alt="ArkLog" className="h-20 w-auto" />
         </div>
         
         <nav className="flex-1 px-4 space-y-1">
-          <NavLink
-            to="/"
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-white text-black' : 'text-gray-400 hover:text-white hover:bg-[#0a0a0a]'
-              }`
-            }
-          >
-            <LayoutDashboard size={18} />
-            Dashboard
-          </NavLink>
-          <NavLink
-            to="/reports"
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-white text-black' : 'text-gray-400 hover:text-white hover:bg-[#0a0a0a]'
-              }`
-            }
-          >
-            <FileText size={18} />
-            All Reports
-          </NavLink>
+          {[
+            { to: '/', icon: <LayoutDashboard size={18} />, label: t.nav.dashboard, exact: true },
+            { to: '/reports', icon: <FileText size={18} />, label: t.nav.reports },
+            { to: '/settings', icon: <Settings size={18} />, label: t.nav.settings },
+          ].map(({ to, icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  isActive ? 'bg-white text-black' : 'text-gray-400 hover:text-white hover:bg-[#0a0a0a]'
+                }`
+              }
+            >
+              {icon}
+              {label}
+            </NavLink>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-border space-y-4">
@@ -63,7 +62,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             className="flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm font-medium text-gray-400 hover:text-red-400 hover:bg-red-900/10 transition-colors"
           >
             <LogOut size={18} />
-            Logout
+            {t.nav.logout}
           </button>
         </div>
       </aside>

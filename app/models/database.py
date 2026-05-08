@@ -39,6 +39,16 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add preference columns to users table if they don't exist yet
+        if "sqlite" in str(engine.url):
+            for col, definition in [
+                ("timezone", "VARCHAR(100) DEFAULT 'America/Sao_Paulo'"),
+                ("language", "VARCHAR(10) DEFAULT 'pt-BR'"),
+            ]:
+                try:
+                    await conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass  # column already exists
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

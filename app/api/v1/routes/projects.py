@@ -193,7 +193,7 @@ async def trigger_instant_report(
     """Trigger an immediate report for a project, bypassing the scheduler."""
     from datetime import datetime, timedelta
     from app.core.events import event_bus
-    from app.integrations.github.api_client import fetch_commits_since
+    from app.integrations.github.api_client import fetch_github_activity
     from app.repositories.commit_repository import CommitRepository
 
     async with AsyncSessionLocal() as session:
@@ -225,31 +225,30 @@ async def trigger_instant_report(
         repo_full_name = project.repo_full_name
         dest_id = dest.id
 
-    # Fetch fresh commits from GitHub API (always current, regardless of webhook history)
+    # Fetch all GitHub activity (commits, PRs, issues, CI, releases)
     owner, repo = repo_full_name.split("/", 1)
-    gh_commits = await fetch_commits_since(owner, repo, since=since)
+    activity = await fetch_github_activity(owner, repo, since=since)
 
-    # Persist any new commits so the DB stays up to date
+    # Persist new commits to DB as a side effect (keeps history for scheduled reports)
+    from app.domain.entities.commit import Commit
+    from app.utils.datetime_utils import parse_github_timestamp
     async with AsyncSessionLocal() as session:
         async with session.begin():
             commit_repo = CommitRepository(session)
-            for c in gh_commits:
-                if not await commit_repo.exists_for_project(c.sha, project_id):
-                    await commit_repo.save_commit(c, project_id)
-
-    # Build commit payload directly from the API response (already filtered by since)
-    commits = [
-        {
-            "sha": c.sha,
-            "short_sha": c.sha[:7],
-            "subject": c.message.split("\n")[0],
-            "author": c.author_name,
-            "files_changed": 0,
-            "directories": [],
-            "extensions": [],
-        }
-        for c in gh_commits
-    ]
+            for c in activity["commits"]:
+                if not await commit_repo.exists_for_project(c["sha"], project_id):
+                    entity = Commit(
+                        sha=c["sha"],
+                        message=c["subject"] + ("\n\n" + c["body"] if c.get("body") else ""),
+                        author_name=c["author"],
+                        author_email="",
+                        timestamp=parse_github_timestamp(c.get("committed_at", "")),
+                        url="",
+                        repo_full_name=repo_full_name,
+                        branch="",
+                        files=(),
+                    )
+                    await commit_repo.save_commit(entity, project_id)
 
     # Re-fetch dest details (session closed above)
     async with AsyncSessionLocal() as session:
@@ -270,11 +269,17 @@ async def trigger_instant_report(
                 "business_context": project.business_context,
                 "report_style": dest.report_style or project.report_style,
                 "clickup_task_id": dest.clickup_task_id,
-                "commit_count": len(commits),
-                "commits": commits,
                 "trigger": "instant",
+                # Full activity payload
+                "commits": activity["commits"],
+                "pull_requests": activity["pull_requests"],
+                "issues": activity["issues"],
+                "workflow_runs": activity["workflow_runs"],
+                "releases": activity["releases"],
+                "commit_count": len(activity["commits"]),
             },
         )
 
-    logger.info("instant_report_queued", project=project.name, commits=len(commits))
-    return {"status": "queued", "commit_count": len(commits)}
+    total_activity = sum(len(v) for v in activity.values())
+    logger.info("instant_report_queued", project=project.name, **{k: len(v) for k, v in activity.items()})
+    return {"status": "queued", "commit_count": len(activity["commits"]), "total_activity": total_activity}

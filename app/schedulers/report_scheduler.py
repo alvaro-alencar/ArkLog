@@ -64,11 +64,11 @@ async def register_project_schedules() -> None:
 
 async def _run_scheduled_report(project_id: int, dest_id: int, trigger: str) -> None:
     """
-    Fetch project and destination from DB and trigger report generation.
+    Fetch project and destination from DB, pull full GitHub activity, trigger report.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from app.core.events import event_bus
-    from app.repositories.commit_repository import CommitRepository
+    from app.integrations.github.api_client import fetch_github_activity
     from app.repositories.report_repository import ReportRepository
     from app.models.tables import ProjectRecord, ReportDestinationRecord
 
@@ -85,42 +85,42 @@ async def _run_scheduled_report(project_id: int, dest_id: int, trigger: str) -> 
 
         logger.info("scheduled_report_fired", project=project.name, dest=dest.label, trigger=trigger)
 
-        report_repo = ReportRepository(session)
-        commit_repo = CommitRepository(session)
-
         if dest.window_hours > 0:
-            from datetime import timedelta
             since = datetime.utcnow() - timedelta(hours=dest.window_hours)
         else:
-            # Continuity: use last report timestamp so we don't repeat commits
+            report_repo = ReportRepository(session)
             last_at = await report_repo.get_last_generated_at_for_trigger(project.id, trigger)
             since = last_at if last_at else datetime(2000, 1, 1)
 
-        records = await commit_repo.get_since(project.id, since)
-        commits = [
-            {
-                "sha": r.sha,
-                "short_sha": r.sha[:7],
-                "subject": r.message.split("\n")[0],
-                "author": r.author_name,
-                "files_changed": r.files_changed,
-                "directories": [],
-                "extensions": [],
-            }
-            for r in records
-        ]
+        # Snapshot project info while session is still open
+        proj_name = project.name
+        proj_desc = project.description
+        proj_stack = project.tech_stack
+        proj_context = project.business_context
+        repo_full_name = project.repo_full_name
+        report_style = dest.report_style or project.report_style
+        clickup_task_id = dest.clickup_task_id
 
-        await event_bus.publish(
-            "commit.batch_ready",
-            {
-                "project_name": project.name,
-                "description": project.description,
-                "tech_stack": project.tech_stack,
-                "business_context": project.business_context,
-                "report_style": dest.report_style or project.report_style,
-                "clickup_task_id": dest.clickup_task_id,
-                "commit_count": len(commits),
-                "commits": commits,
-                "trigger": trigger,
-            },
-        )
+    # Fetch live from GitHub API (always fresh, not dependent on webhook history)
+    owner, repo = repo_full_name.split("/", 1)
+    activity = await fetch_github_activity(owner, repo, since=since if since != datetime(2000, 1, 1) else None)
+
+    from app.core.events import event_bus
+    await event_bus.publish(
+        "commit.batch_ready",
+        {
+            "project_name": proj_name,
+            "description": proj_desc,
+            "tech_stack": proj_stack,
+            "business_context": proj_context,
+            "report_style": report_style,
+            "clickup_task_id": clickup_task_id,
+            "trigger": trigger,
+            "commits": activity["commits"],
+            "pull_requests": activity["pull_requests"],
+            "issues": activity["issues"],
+            "workflow_runs": activity["workflow_runs"],
+            "releases": activity["releases"],
+            "commit_count": len(activity["commits"]),
+        },
+    )

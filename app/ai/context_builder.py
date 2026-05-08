@@ -1,19 +1,16 @@
 """
 ArkLog - Context Builder
 
-Assembles prompt context from project configuration and commit data.
-Loads prompt templates from prompts/ and fills in observed values.
-
-Hallucination prevention starts here: only data explicitly present in
-the commit payload is injected into the prompt. Nothing is inferred.
+Assembles prompt context from project metadata and GitHub activity data
+(commits, PRs, issues, CI runs, releases). Only data explicitly present
+in the payload is injected — nothing is inferred or invented.
 """
 
-from pathlib import Path
 from typing import Any
 
 import structlog
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+logger = structlog.get_logger(__name__)
 
 _PERIOD_LABELS = {
     "backfill": "histórico completo do projeto (todos os commits)",
@@ -21,37 +18,15 @@ _PERIOD_LABELS = {
     "daily_scheduled": "período desde o último relatório diário",
 }
 
+
 def _period_label(trigger: str) -> str:
     return _PERIOD_LABELS.get(trigger, "atividade recente")
-
-logger = structlog.get_logger(__name__)
-
-_FALLBACK_TEMPLATES: dict[str, str] = {
-    "report_executive.md": (
-        "Project: {project_name}\n"
-        "Description: {project_description}\n"
-        "Stack: {tech_stack}\n"
-        "Context: {business_context}\n"
-        "Period: {period_start} to {period_end}\n"
-        "Commits: {commit_count} | Files changed: {files_changed}\n"
-        "Areas: {directories}\n\n"
-        "Activity:\n{commit_summaries}"
-    ),
-    "report_technical.md": (
-        "Project: {project_name}\n"
-        "Stack: {tech_stack}\n"
-        "Period: {period_start} to {period_end}\n"
-        "Commits: {commit_count}\n\n"
-        "Details:\n{commit_details}"
-    ),
-}
 
 
 class ContextBuilder:
     """Builds structured prompt context for the AI report engine."""
 
     def build_context(self, payload: dict[str, Any]) -> str:
-        """Route to the appropriate template based on report_style."""
         style = payload.get("report_style", "misto")
         if style == "executivo":
             return self._build_executive(payload)
@@ -59,66 +34,171 @@ class ContextBuilder:
             return self._build_technical(payload)
         return self._build_executive(payload) + "\n\n---\n\n" + self._build_technical(payload)
 
+    # ------------------------------------------------------------------
+    # Executive view
+    # ------------------------------------------------------------------
+
     def _build_executive(self, payload: dict[str, Any]) -> str:
-        template = self._load_template("report_executive.md")
-        commits = payload.get("commits", [])
         period = _period_label(payload.get("trigger", "webhook"))
-        return template.format(
-            project_name=payload.get("project_name", ""),
-            project_description=payload.get("description", "Not specified"),
-            tech_stack=", ".join(payload.get("tech_stack", [])) or "Not specified",
-            business_context=payload.get("business_context", "Not specified"),
-            period_start=period,
-            period_end="hoje",
-            commit_count=payload.get("commit_count", 0),
-            files_changed=sum(c.get("files_changed", 0) for c in commits),
-            directories=", ".join(sorted(self._unique_directories(commits))) or "root",
-            commit_summaries=self._format_summaries(commits),
-        )
+        lines = [
+            "## Contexto do Projeto",
+            f"- **Projeto:** {payload.get('project_name', '')}",
+            f"- **Descrição:** {payload.get('description', 'Não especificada')}",
+            f"- **Stack:** {', '.join(payload.get('tech_stack', [])) or 'Não especificada'}",
+            f"- **Contexto de negócio:** {payload.get('business_context', 'Não especificado')}",
+            f"- **Período:** {period}",
+            "",
+            self._section_commits_summary(payload.get("commits", [])),
+            self._section_prs(payload.get("pull_requests", [])),
+            self._section_issues(payload.get("issues", [])),
+            self._section_workflows(payload.get("workflow_runs", [])),
+            self._section_releases(payload.get("releases", [])),
+            "",
+            "## Instrução",
+            "",
+            "Gere um **relatório executivo de progresso** em pt-BR com a seguinte estrutura Markdown:",
+            "",
+            "```",
+            "## Status",
+            "",
+            "[Uma frase declarativa sobre o estado atual do projeto.]",
+            "",
+            "### O que Evoluiu",
+            "",
+            "[Bullet points curtos descrevendo as mudanças em linguagem de negócio.]",
+            "",
+            "### Impacto",
+            "",
+            "[O que essas mudanças significam para o produto ou stakeholders. Omita se não houver dados.]",
+            "",
+            "### Próximos Passos *(opcional)*",
+            "",
+            "[Apenas se houver continuidade clara nos dados. Omita se não houver.]",
+            "```",
+            "",
+            "**Regras:** máximo 200 palavras. Sem frases genéricas. Se não houver atividade, infira a fase "
+            "atual pelo contexto do projeto. Retorne APENAS o relatório formatado.",
+        ]
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Technical view
+    # ------------------------------------------------------------------
 
     def _build_technical(self, payload: dict[str, Any]) -> str:
-        template = self._load_template("report_technical.md")
-        commits = payload.get("commits", [])
-        period = _period_label(payload.get("trigger", "webhook"))
-        return template.format(
-            project_name=payload.get("project_name", ""),
-            tech_stack=", ".join(payload.get("tech_stack", [])) or "Not specified",
-            period_start=period,
-            period_end="hoje",
-            commit_count=payload.get("commit_count", 0),
-            commit_details=self._format_details(commits),
-        )
+        lines = [
+            "## Contexto do Projeto",
+            f"- **Projeto:** {payload.get('project_name', '')}",
+            f"- **Stack:** {', '.join(payload.get('tech_stack', [])) or 'Não especificada'}",
+            "",
+            self._section_commits_detail(payload.get("commits", [])),
+            self._section_prs(payload.get("pull_requests", [])),
+            self._section_issues(payload.get("issues", [])),
+            self._section_workflows(payload.get("workflow_runs", [])),
+            self._section_releases(payload.get("releases", [])),
+            "",
+            "## Instrução",
+            "",
+            "Gere um **relatório técnico de progresso** em pt-BR com a seguinte estrutura Markdown:",
+            "",
+            "```",
+            "## Alterações Técnicas",
+            "",
+            "[Bullet points objetivos: o que foi construído, modificado ou mergeado.]",
+            "",
+            "### Decisões de Arquitetura *(opcional)*",
+            "",
+            "[Padrões introduzidos, refatorações, mudanças de design. Omita se não houver.]",
+            "",
+            "### CI/CD & Qualidade *(opcional)*",
+            "",
+            "[Status dos pipelines, testes, deploys. Omita se não houver dados.]",
+            "",
+            "### Débito Técnico / Riscos *(opcional)*",
+            "",
+            "[Apenas se claramente visível nos dados. Omita se não houver evidência.]",
+            "```",
+            "",
+            "**Regras:** máximo 200 palavras. Linguagem precisa para desenvolvedores. "
+            "Retorne APENAS o relatório formatado.",
+        ]
+        return "\n".join(lines)
 
-    def _format_summaries(self, commits: list[dict]) -> str:
+    # ------------------------------------------------------------------
+    # Section formatters
+    # ------------------------------------------------------------------
+
+    def _section_commits_summary(self, commits: list[dict]) -> str:
         if not commits:
-            return "No commits in this period."
-        return "\n".join(
-            f"- [{c.get('short_sha', '')}] {c.get('subject', '')} "
-            f"(by {c.get('author', '')}) — areas: {', '.join(c.get('directories', [])) or 'root'}"
-            for c in commits
-        )
-
-    def _format_details(self, commits: list[dict]) -> str:
-        if not commits:
-            return "No commits in this period."
-        return "\n\n".join(
-            f"**[{c.get('short_sha', '')}]** {c.get('subject', '')}\n"
-            f"  Author: {c.get('author', '')} | "
-            f"Files: {c.get('files_changed', 0)} | "
-            f"Types: {', '.join(c.get('extensions', [])) or 'unknown'} | "
-            f"Areas: {', '.join(c.get('directories', [])) or 'root'}"
-            for c in commits
-        )
-
-    def _unique_directories(self, commits: list[dict]) -> set[str]:
-        dirs: set[str] = set()
+            return "## Commits\nNenhum commit no período."
+        lines = [f"## Commits ({len(commits)})"]
         for c in commits:
-            dirs.update(c.get("directories", []))
-        return dirs
+            lines.append(
+                f"- `{c.get('short_sha', '')}` {c.get('subject', '')} *(by {c.get('author', '')})*"
+            )
+        return "\n".join(lines)
 
-    def _load_template(self, filename: str) -> str:
-        path = PROMPTS_DIR / filename
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-        logger.warning("template_not_found", filename=filename, fallback="using built-in")
-        return _FALLBACK_TEMPLATES[filename]
+    def _section_commits_detail(self, commits: list[dict]) -> str:
+        if not commits:
+            return "## Commits\nNenhum commit no período."
+        lines = [f"## Commits ({len(commits)})"]
+        for c in commits:
+            entry = f"- `{c.get('short_sha', '')}` **{c.get('subject', '')}** — by {c.get('author', '')}"
+            body = c.get("body", "").strip()
+            if body:
+                entry += f"\n  > {body[:150]}"
+            lines.append(entry)
+        return "\n".join(lines)
+
+    def _section_prs(self, prs: list[dict]) -> str:
+        if not prs:
+            return ""
+        lines = [f"## Pull Requests ({len(prs)})"]
+        for pr in prs:
+            state = pr.get("state", "open").upper()
+            labels = f" [{', '.join(pr['labels'])}]" if pr.get("labels") else ""
+            lines.append(
+                f"- **#{pr['number']}** {pr.get('title', '')} — {state}{labels} *(by {pr.get('author', '')})*"
+            )
+            body = pr.get("body", "").strip()
+            if body:
+                lines.append(f"  > {body[:150]}")
+        return "\n".join(lines)
+
+    def _section_issues(self, issues: list[dict]) -> str:
+        if not issues:
+            return ""
+        lines = [f"## Issues ({len(issues)})"]
+        for issue in issues:
+            state = issue.get("state", "open").upper()
+            labels = f" [{', '.join(issue['labels'])}]" if issue.get("labels") else ""
+            lines.append(
+                f"- **#{issue['number']}** {issue.get('title', '')} — {state}{labels} *(by {issue.get('author', '')})*"
+            )
+        return "\n".join(lines)
+
+    def _section_workflows(self, runs: list[dict]) -> str:
+        if not runs:
+            return ""
+        lines = [f"## CI/CD — Workflow Runs ({len(runs)})"]
+        for run in runs:
+            conclusion = run.get("conclusion", "in_progress").upper()
+            branch = run.get("branch", "")
+            subject = run.get("commit_subject", "")
+            lines.append(
+                f"- **{run.get('name', '')}** [{branch}] → {conclusion}"
+                + (f" | commit: {subject}" if subject else "")
+            )
+        return "\n".join(lines)
+
+    def _section_releases(self, releases: list[dict]) -> str:
+        if not releases:
+            return ""
+        lines = [f"## Releases ({len(releases)})"]
+        for rel in releases:
+            pre = " *(pre-release)*" if rel.get("prerelease") else ""
+            lines.append(f"- **{rel.get('tag', '')}** — {rel.get('name', '')}{pre} by {rel.get('author', '')}")
+            body = rel.get("body", "").strip()
+            if body:
+                lines.append(f"  > {body[:200]}")
+        return "\n".join(lines)

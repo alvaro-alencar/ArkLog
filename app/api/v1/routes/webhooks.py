@@ -43,6 +43,14 @@ async def receive_github_webhook(
     match event_type:
         case "push":
             await event_bus.publish("github.push", payload)
+        case "pull_request":
+            await event_bus.publish("github.pull_request", payload)
+        case "issues":
+            await event_bus.publish("github.issues", payload)
+        case "workflow_run":
+            await event_bus.publish("github.workflow_run", payload)
+        case "release":
+            await event_bus.publish("github.release", payload)
         case "ping":
             logger.info("webhook_ping", zen=payload.get("zen", ""))
         case _:

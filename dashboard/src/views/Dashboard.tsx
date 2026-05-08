@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ExternalLink, GitBranch, Calendar, Plus, Zap } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 
 interface Project {
@@ -23,6 +23,7 @@ const WINDOW_OPTIONS = [
 ];
 
 const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [instantProjectId, setInstantProjectId] = useState<number | null>(null);
@@ -162,7 +163,10 @@ const Dashboard: React.FC = () => {
                   <Calendar size={12} />
                   Added {new Date(project.created_at).toLocaleDateString()}
                 </div>
-                <button className="text-xs font-medium px-3 py-1 bg-white text-black rounded hover:bg-gray-200 transition-colors">
+                <button
+                  onClick={() => navigate(`/reports?project=${project.id}`)}
+                  className="text-xs font-medium px-3 py-1 bg-white text-black rounded hover:bg-gray-200 transition-colors"
+                >
                   View Reports
                 </button>
               </div>

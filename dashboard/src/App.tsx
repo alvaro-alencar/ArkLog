@@ -7,6 +7,7 @@ import Login from './views/Login';
 import OAuthCallback from './views/OAuthCallback';
 import Dashboard from './views/Dashboard';
 import NewProject from './views/NewProject';
+import Reports from './views/Reports';
 import Settings from './views/Settings';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -58,13 +59,7 @@ const App: React.FC = () => {
             path="/reports"
             element={
               <ProtectedRoute>
-                <div className="space-y-4">
-                  <h2 className="text-3xl font-bold tracking-tight">All Reports</h2>
-                  <p className="text-gray-400">View history of generated AI reports.</p>
-                  <div className="glass-card p-12 text-center text-gray-500">
-                    Reports view coming soon.
-                  </div>
-                </div>
+                <Reports />
               </ProtectedRoute>
             }
           />

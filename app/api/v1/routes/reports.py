@@ -1,91 +1,103 @@
-"""
-ArkLog - Report History Endpoints
+"""ArkLog - Report History Endpoints."""
 
-GET /projects/{name}/reports           — paginated report list
-GET /reports/{report_id}               — full report content
-"""
-
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
-from app.config.projects import projects_config
+from app.api.v1.deps import get_current_user
 from app.models.database import AsyncSessionLocal
-from app.models.tables import ProjectRecord
+from app.models.tables import ProjectRecord, ReportRecord, UserRecord
 from app.repositories.report_repository import ReportRepository
 from app.schemas.report import ReportDetailResponse, ReportListResponse, ReportSummaryResponse
 
 router = APIRouter()
 
 
-@router.get("/projects/{name}/reports", response_model=ReportListResponse)
-async def list_project_reports(
-    name: str,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-) -> ReportListResponse:
-    """Paginated report history for a project, newest first."""
-    if not projects_config.get_by_name(name):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{name}' not found")
-
-    async with AsyncSessionLocal() as session:
-        proj_result = await session.execute(
-            select(ProjectRecord).where(ProjectRecord.name == name).limit(1)
-        )
-        db_project = proj_result.scalar_one_or_none()
-
-        if db_project is None:
-            return ReportListResponse(project_name=name, total=0, limit=limit, offset=offset, reports=[])
-
-        repo = ReportRepository(session)
-        records = await repo.get_by_project(db_project.id, limit=limit, offset=offset)
-        total = await repo.count_by_project(db_project.id)
-
-    return ReportListResponse(
-        project_name=name,
-        total=total,
-        limit=limit,
-        offset=offset,
-        reports=[
-            ReportSummaryResponse(
-                id=r.id,
-                project_name=name,
-                trigger=r.trigger,
-                status=r.status,
-                summary=r.summary,
-                commit_count=r.commit_count,
-                generated_at=r.generated_at,
-                published_at=r.published_at,
-                clickup_comment_id=r.clickup_comment_id,
-            )
-            for r in records
-        ],
+def _to_summary(record: ReportRecord, project_name: str) -> ReportSummaryResponse:
+    return ReportSummaryResponse(
+        id=record.id,
+        project_id=record.project_id,
+        project_name=project_name,
+        trigger=record.trigger,
+        status=record.status,
+        summary=record.summary,
+        commit_count=record.commit_count,
+        generated_at=record.generated_at,
     )
 
 
-@router.get("/reports/{report_id}", response_model=ReportDetailResponse)
-async def get_report(report_id: int) -> ReportDetailResponse:
-    """Retrieve the full content of a specific report by ID."""
+@router.get("", response_model=ReportListResponse)
+async def list_reports(
+    project_id: int | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: UserRecord = Depends(get_current_user),
+) -> ReportListResponse:
+    """All reports for the current user, optionally filtered by project."""
+    async with AsyncSessionLocal() as session:
+        # Fetch user's projects to build a name map and scope by ownership
+        proj_result = await session.execute(
+            select(ProjectRecord).where(ProjectRecord.user_id == current_user.id)
+        )
+        user_projects = {p.id: p.name for p in proj_result.scalars().all()}
+
+        if not user_projects:
+            return ReportListResponse(total=0, limit=limit, offset=offset, reports=[])
+
+        project_ids = [project_id] if project_id and project_id in user_projects else list(user_projects.keys())
+
+        stmt = (
+            select(ReportRecord)
+            .where(ReportRecord.project_id.in_(project_ids))
+            .order_by(ReportRecord.generated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        records = list((await session.execute(stmt)).scalars().all())
+
+        from sqlalchemy import func
+        total_result = await session.execute(
+            select(func.count(ReportRecord.id)).where(ReportRecord.project_id.in_(project_ids))
+        )
+        total = total_result.scalar_one()
+
+    return ReportListResponse(
+        total=total,
+        limit=limit,
+        offset=offset,
+        reports=[_to_summary(r, user_projects.get(r.project_id, "unknown")) for r in records],
+    )
+
+
+@router.get("/{report_id}", response_model=ReportDetailResponse)
+async def get_report(
+    report_id: int,
+    current_user: UserRecord = Depends(get_current_user),
+) -> ReportDetailResponse:
+    """Full content of a single report (scoped to current user)."""
     async with AsyncSessionLocal() as session:
         repo = ReportRepository(session)
         record = await repo.get_by_id(report_id)
-
         if not record:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+            raise HTTPException(status_code=404, detail="Report not found")
 
         proj_result = await session.execute(
-            select(ProjectRecord).where(ProjectRecord.id == record.project_id).limit(1)
+            select(ProjectRecord).where(
+                ProjectRecord.id == record.project_id,
+                ProjectRecord.user_id == current_user.id,
+            )
         )
-        db_project = proj_result.scalar_one_or_none()
+        project = proj_result.scalar_one_or_none()
+        if not project:
+            raise HTTPException(status_code=404, detail="Report not found")
 
     return ReportDetailResponse(
         id=record.id,
-        project_name=db_project.name if db_project else "unknown",
+        project_id=record.project_id,
+        project_name=project.name,
         trigger=record.trigger,
         status=record.status,
         summary=record.summary,
         content=record.content,
         commit_count=record.commit_count,
         generated_at=record.generated_at,
-        published_at=record.published_at,
-        clickup_comment_id=record.clickup_comment_id,
     )

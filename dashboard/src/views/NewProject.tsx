@@ -214,10 +214,10 @@ const NewProject: React.FC = () => {
               boxShadow: ["0 0 10px rgba(168,85,247,0.1)", "0 0 25px rgba(168,85,247,0.3)", "0 0 10px rgba(168,85,247,0.1)"]
             }}
             transition={{ repeat: Infinity, duration: 4 }}
-            className="w-32 h-32 rounded-full bg-black border-2 border-white/20 flex items-center justify-center relative overflow-hidden"
+            className="w-48 h-48 rounded-full bg-black border-2 border-white/20 flex items-center justify-center relative overflow-hidden"
           >
             <div className="absolute inset-0 bg-gradient-to-tr from-purple-600/20 to-transparent" />
-            <ArkLogLogo size={64} className="text-white" />
+            <img src="/logo_arklog.png" alt="ArkLog" className="w-36 h-36 object-contain relative z-10" />
           </motion.div>
           <p className="text-[10px] text-gray-600 font-medium uppercase tracking-widest">AI Engine</p>
         </div>

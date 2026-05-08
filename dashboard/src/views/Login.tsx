@@ -24,7 +24,7 @@ const Login: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center bg-black px-4">
       <div className="max-w-md w-full text-center space-y-8">
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold tracking-tighter text-white">ArkLog</h1>
+          <img src="/logo_arklog.png" alt="ArkLog" className="h-40 w-auto mx-auto" />
           <p className="text-gray-400">AI-powered progress reporter for modern teams.</p>
         </div>
         

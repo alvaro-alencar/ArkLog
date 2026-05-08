@@ -193,6 +193,7 @@ async def trigger_instant_report(
     """Trigger an immediate report for a project, bypassing the scheduler."""
     from datetime import datetime, timedelta
     from app.core.events import event_bus
+    from app.integrations.github.api_client import fetch_commits_since
     from app.repositories.commit_repository import CommitRepository
 
     async with AsyncSessionLocal() as session:
@@ -218,23 +219,47 @@ async def trigger_instant_report(
         since = (
             datetime.utcnow() - timedelta(hours=data.window_hours)
             if data.window_hours > 0
-            else datetime(2000, 1, 1)
+            else None
         )
 
-        commit_repo = CommitRepository(session)
-        records = await commit_repo.get_since(project_id, since)
-        commits = [
-            {
-                "sha": r.sha,
-                "short_sha": r.sha[:7],
-                "subject": r.message.split("\n")[0],
-                "author": r.author_name,
-                "files_changed": r.files_changed,
-                "directories": [],
-                "extensions": [],
-            }
-            for r in records
-        ]
+        repo_full_name = project.repo_full_name
+        dest_id = dest.id
+
+    # Fetch fresh commits from GitHub API (always current, regardless of webhook history)
+    owner, repo = repo_full_name.split("/", 1)
+    gh_commits = await fetch_commits_since(owner, repo, since=since)
+
+    # Persist any new commits so the DB stays up to date
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            commit_repo = CommitRepository(session)
+            for c in gh_commits:
+                if not await commit_repo.exists_for_project(c.sha, project_id):
+                    await commit_repo.save_commit(c, project_id)
+
+    # Build commit payload directly from the API response (already filtered by since)
+    commits = [
+        {
+            "sha": c.sha,
+            "short_sha": c.sha[:7],
+            "subject": c.message.split("\n")[0],
+            "author": c.author_name,
+            "files_changed": 0,
+            "directories": [],
+            "extensions": [],
+        }
+        for c in gh_commits
+    ]
+
+    # Re-fetch dest details (session closed above)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ProjectRecord)
+            .where(ProjectRecord.id == project_id)
+            .options(selectinload(ProjectRecord.destinations))
+        )
+        project = result.scalar_one()
+        dest = next(d for d in project.destinations if d.id == dest_id)
 
         await event_bus.publish(
             "commit.batch_ready",

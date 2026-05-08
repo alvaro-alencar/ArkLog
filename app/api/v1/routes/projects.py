@@ -89,14 +89,19 @@ async def create_project(
                     project_id=project.id,
                 )
                 session.add(dest)
-            
-            # Re-fetch with destinations for response
+
             await session.flush()
-            
-    # Refresh schedules (in-memory scheduler update)
+            project_id = project.id
+
+        # Re-fetch with destinations eagerly loaded while session is still open
+        result = await session.execute(
+            select(ProjectRecord)
+            .where(ProjectRecord.id == project_id)
+            .options(selectinload(ProjectRecord.destinations))
+        )
+        project = result.scalar_one()
+
     from app.schedulers.report_scheduler import register_project_schedules
-    from app.core.events import on_startup # or a more surgical update
-    # For now, just re-register everything (idempotent due to replace_existing=True)
     await register_project_schedules()
 
     return project
@@ -144,6 +149,39 @@ async def delete_project(
     # Re-register schedules to remove deleted project jobs
     from app.schedulers.report_scheduler import register_project_schedules
     await register_project_schedules()
+
+
+@router.post("/{project_id}/backfill", status_code=status.HTTP_202_ACCEPTED)
+async def backfill_commits(
+    project_id: int,
+    current_user: UserRecord = Depends(get_current_user),
+) -> dict:
+    """Fetch all commits from GitHub API and persist them for the project."""
+    from app.integrations.github.api_client import fetch_all_commits
+    from app.repositories.commit_repository import CommitRepository
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ProjectRecord).where(ProjectRecord.id == project_id, ProjectRecord.user_id == current_user.id)
+        )
+        project = result.scalar_one_or_none()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    owner, repo = project.repo_full_name.split("/", 1)
+    commits = await fetch_all_commits(owner, repo)
+
+    saved = 0
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            commit_repo = CommitRepository(session)
+            for commit in commits:
+                if not await commit_repo.exists_for_project(commit.sha, project_id):
+                    await commit_repo.save_commit(commit, project_id)
+                    saved += 1
+
+    logger.info("backfill_complete", project=project.repo_full_name, saved=saved, total=len(commits))
+    return {"status": "ok", "saved": saved, "total": len(commits)}
 
 
 @router.post("/{project_id}/instant-report", status_code=status.HTTP_202_ACCEPTED)

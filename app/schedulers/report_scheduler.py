@@ -5,6 +5,7 @@ Registers cron jobs for all ProjectDestinations stored in the database.
 """
 
 import structlog
+from sqlalchemy import select
 
 from app.models.database import AsyncSessionLocal
 from app.repositories.project_repository import ProjectRepository
@@ -73,9 +74,8 @@ async def _run_scheduled_report(project_id: int, dest_id: int, trigger: str) -> 
 
     async with AsyncSessionLocal() as session:
         project = await session.get(ProjectRecord, project_id)
-        # Manually fetch destination to avoid lazy loading issues in background job
         result = await session.execute(
-            ProjectRepository(session).select(ReportDestinationRecord).where(ReportDestinationRecord.id == dest_id)
+            select(ReportDestinationRecord).where(ReportDestinationRecord.id == dest_id)
         )
         dest = result.scalar_one_or_none()
 

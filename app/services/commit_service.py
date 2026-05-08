@@ -10,11 +10,13 @@ Now fully driven by DB configurations.
 from typing import Any
 
 import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.integrations.github.commit_parser import CommitParser
 from app.models.database import AsyncSessionLocal
+from app.models.tables import ProjectRecord
 from app.repositories.commit_repository import CommitRepository
-from app.repositories.project_repository import ProjectRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -29,48 +31,42 @@ class CommitService:
         repo_full_name = payload.get("repository", {}).get("full_name", "unknown")
         log = logger.bind(repo=repo_full_name)
 
-        # 1. Parse commits from the webhook payload (even if project not found yet)
         commits = self._parser.parse(payload)
         if not commits:
             log.info("commit_service_no_commits")
             return
 
-        # 2. Match the incoming repo to configured projects in the DB
-        async with AsyncSessionLocal() as session:
-            project_repo = ProjectRepository(session)
-            commit_repo = CommitRepository(session)
-            
-            # Find all projects using this repository
-            # (different users might have the same repo monitored with different configs)
-            result = await session.execute(
-                project_repo.select().where(project_repo.model.repo_full_name == repo_full_name)
-            )
-            projects = result.scalars().all()
-            
-            if not projects:
-                log.debug("commit_service_repo_not_monitored")
-                return
+        project_new_commits: dict[int, list] = {}
 
-            for project in projects:
-                # 3. Persist new commits for this project
-                new_commits_for_project = []
-                async with session.begin_nested():
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                commit_repo = CommitRepository(session)
+
+                result = await session.execute(
+                    select(ProjectRecord)
+                    .where(ProjectRecord.repo_full_name == repo_full_name)
+                    .options(selectinload(ProjectRecord.destinations))
+                )
+                projects = list(result.scalars().all())
+
+                if not projects:
+                    log.debug("commit_service_repo_not_monitored")
+                    return
+
+                for project in projects:
+                    new_commits_for_project = []
                     for commit in commits:
                         if not await commit_repo.exists_for_project(commit.sha, project.id):
                             await commit_repo.save_commit(commit, project.id)
                             new_commits_for_project.append(commit)
-                
-                if not new_commits_for_project:
-                    continue
 
-                log.info(
-                    "commits_ingested", 
-                    project=project.name, 
-                    new=len(new_commits_for_project)
-                )
+                    if new_commits_for_project:
+                        project_new_commits[project.id] = new_commits_for_project
+                        log.info("commits_ingested", project=project.name, new=len(new_commits_for_project))
 
-                # 4. Notify about new commits for daily destinations
-                await self._notify_destinations(project, new_commits_for_project)
+        for project in projects:
+            if project.id in project_new_commits:
+                await self._notify_destinations(project, project_new_commits[project.id])
 
     async def _notify_destinations(self, project: Any, new_commits: list[Any]) -> None:
         from app.core.events import event_bus
@@ -88,7 +84,6 @@ class CommitService:
             for c in new_commits
         ]
 
-        # Filter daily destinations
         daily_dests = [d for d in project.destinations if d.schedule == "daily"]
 
         for dest in daily_dests:

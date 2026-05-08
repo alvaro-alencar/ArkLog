@@ -29,6 +29,24 @@ class UserRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
 
     projects: Mapped[list["ProjectRecord"]] = relationship(back_populates="user")
+    integrations: Mapped[list["UserIntegrationRecord"]] = relationship(back_populates="user")
+
+
+class UserIntegrationRecord(Base):
+    """Per-user integration credentials — one row per connected platform."""
+
+    __tablename__ = "user_integrations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    integration_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    credentials: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
+
+    user: Mapped["UserRecord"] = relationship(back_populates="integrations")
+
+    __table_args__ = (UniqueConstraint("user_id", "integration_type", name="uix_user_integration"),)
 
 
 class ProjectRecord(Base):

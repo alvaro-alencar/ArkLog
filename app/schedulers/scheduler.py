@@ -40,7 +40,7 @@ _jobstores = {
     )
 }
 
-scheduler = AsyncIOScheduler(jobstores=_jobstores, timezone="UTC")
+scheduler = AsyncIOScheduler(jobstores=_jobstores, timezone=settings.scheduler_timezone)
 
 
 async def start_scheduler() -> None:

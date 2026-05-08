@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # ── Scheduler ────────────────────────────────────────────────
     # Set SCHEDULER_ENABLED=false on replica containers to prevent duplicate reports
     scheduler_enabled: bool = Field(default=True)
+    # Timezone used for interpreting cron schedule times entered by the user.
+    # Users enter times in local time, so this must match their timezone.
+    scheduler_timezone: str = Field(default="America/Sao_Paulo")
 
     # ── Webhook ──────────────────────────────────────────────────
     max_commits_per_webhook: int = Field(default=50)

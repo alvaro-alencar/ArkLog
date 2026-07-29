@@ -10,6 +10,8 @@ import ProjectEntry from './views/ProjectEntry';
 import Reports from './views/Reports';
 import Settings from './views/Settings';
 import AccessAdmin from './views/AccessAdmin';
+import Connections from './views/Connections';
+import Flows from './views/Flows';
 
 const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
 
@@ -39,10 +41,13 @@ const App: React.FC = () => (
         <ExpiredSessionListener />
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/new" element={<ProtectedRoute><ProjectEntry /></ProtectedRoute>} />
+          <Route path="/" element={<ProtectedRoute><Flows /></ProtectedRoute>} />
+          <Route path="/flows" element={<ProtectedRoute><Flows /></ProtectedRoute>} />
+          <Route path="/connections" element={<ProtectedRoute><Connections /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+          <Route path="/projects" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/projects/new" element={<ProtectedRoute><ProjectEntry /></ProtectedRoute>} />
           <Route path="/access" element={<ProtectedRoute admin><AccessAdmin /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

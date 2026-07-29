@@ -1,21 +1,12 @@
-"""
-ArkLog - Context Builder
-
-Assembles prompt context from project metadata and GitHub activity data
-(commits, PRs, issues, CI runs, releases). Only data explicitly present
-in the payload is injected — nothing is inferred or invented.
-"""
+"""Build bounded LLM context from normalized source events or legacy GitHub payloads."""
 
 from typing import Any
 
-import structlog
-
-logger = structlog.get_logger(__name__)
-
 _PERIOD_LABELS = {
-    "backfill": "histórico completo do projeto (todos os commits)",
-    "weekly_scheduled": "semana completa (desde o último relatório semanal)",
+    "backfill": "histórico completo",
+    "weekly_scheduled": "semana completa",
     "daily_scheduled": "período desde o último relatório diário",
+    "manual_flow": "janela escolhida pelo usuário",
 }
 
 
@@ -24,19 +15,75 @@ def _period_label(trigger: str) -> str:
 
 
 class ContextBuilder:
-    """Builds structured prompt context for the AI report engine."""
+    """Build structured context without coupling the LLM to one provider."""
 
     def build_context(self, payload: dict[str, Any]) -> str:
+        if "normalized_events" in payload:
+            return self._build_normalized(payload)
         style = payload.get("report_style", "misto")
         if style == "executivo":
             return self._build_executive(payload)
-        elif style == "tecnico":
+        if style == "tecnico":
             return self._build_technical(payload)
         return self._build_executive(payload) + "\n\n---\n\n" + self._build_technical(payload)
 
-    # ------------------------------------------------------------------
-    # Executive view
-    # ------------------------------------------------------------------
+    def _build_normalized(self, payload: dict[str, Any]) -> str:
+        style = str(payload.get("report_style") or "misto")
+        events = payload.get("normalized_events") or []
+        lines = [
+            "## Configuração do fluxo",
+            f"- **Fluxo:** {payload.get('project_name', '')}",
+            f"- **Fonte:** {payload.get('source_provider', 'desconhecida')}",
+            f"- **Origem selecionada:** {payload.get('source_label', '')}",
+            f"- **Período:** {_period_label(payload.get('trigger', 'manual_flow'))}",
+        ]
+        instructions = str(payload.get("business_context") or "").strip()
+        if instructions:
+            lines.append(f"- **Instruções do usuário:** {instructions}")
+        lines.extend(["", f"## Eventos normalizados ({len(events)})"])
+        if not events:
+            lines.append("Nenhum evento foi coletado na janela selecionada.")
+        for event in events:
+            reference = str(event.get("reference") or "").strip()
+            actor = str(event.get("actor") or "").strip()
+            labels = event.get("labels") or []
+            metadata = [
+                str(event.get("type") or "evento"),
+                str(event.get("status") or ""),
+                reference,
+                f"por {actor}" if actor else "",
+                f"labels: {', '.join(labels)}" if labels else "",
+            ]
+            suffix = " · ".join(item for item in metadata if item)
+            lines.append(f"- **{event.get('title', '')}** ({suffix})")
+            description = str(event.get("description") or "").strip()
+            if description:
+                lines.append(f"  > {description[:350]}")
+
+        lines.extend(["", "## Instrução de saída", ""])
+        if style == "executivo":
+            lines.extend(
+                [
+                    "Produza um relatório executivo em Markdown com: Status, O que Evoluiu, Impacto e Próximos Passos quando houver evidência.",
+                    "Máximo 220 palavras. Não cite quantidade de eventos salvo se as instruções pedirem.",
+                ]
+            )
+        elif style == "tecnico":
+            lines.extend(
+                [
+                    "Produza um relatório técnico em Markdown com: Alterações, Decisões, Qualidade/Automação e Riscos quando houver evidência.",
+                    "Máximo 300 palavras. Seja preciso e não invente detalhes ausentes.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "Produza um relatório misto em Markdown: resumo executivo curto seguido de evolução técnica, impacto, riscos e próximos passos quando sustentados pelos eventos.",
+                    "Máximo 400 palavras. Não invente fatos, decisões ou arquivos.",
+                ]
+            )
+        lines.append("Retorne apenas o relatório formatado.")
+        return "\n".join(lines)
 
     def _build_executive(self, payload: dict[str, Any]) -> str:
         period = _period_label(payload.get("trigger", "webhook"))
@@ -55,35 +102,9 @@ class ContextBuilder:
             self._section_releases(payload.get("releases", [])),
             "",
             "## Instrução",
-            "",
-            "Gere um **relatório executivo de progresso** em pt-BR com a seguinte estrutura Markdown:",
-            "",
-            "```",
-            "## Status",
-            "",
-            "[Uma frase declarativa sobre o estado atual do projeto.]",
-            "",
-            "### O que Evoluiu",
-            "",
-            "[Bullet points curtos descrevendo as mudanças em linguagem de negócio.]",
-            "",
-            "### Impacto",
-            "",
-            "[O que essas mudanças significam para o produto ou stakeholders. Omita se não houver dados.]",
-            "",
-            "### Próximos Passos *(opcional)*",
-            "",
-            "[Apenas se houver continuidade clara nos dados. Omita se não houver.]",
-            "```",
-            "",
-            "**Regras:** máximo 200 palavras. Sem frases genéricas. Se não houver atividade, infira a fase "
-            "atual pelo contexto do projeto. Retorne APENAS o relatório formatado.",
+            "Gere um relatório executivo de progresso em pt-BR com Status, O que Evoluiu, Impacto e Próximos Passos quando houver evidência. Máximo 200 palavras. Retorne apenas o relatório.",
         ]
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # Technical view
-    # ------------------------------------------------------------------
 
     def _build_technical(self, payload: dict[str, Any]) -> str:
         lines = [
@@ -98,43 +119,17 @@ class ContextBuilder:
             self._section_releases(payload.get("releases", [])),
             "",
             "## Instrução",
-            "",
-            "Gere um **relatório técnico de progresso** em pt-BR com a seguinte estrutura Markdown:",
-            "",
-            "```",
-            "## Alterações Técnicas",
-            "",
-            "[Bullet points objetivos: o que foi construído, modificado ou mergeado.]",
-            "",
-            "### Decisões de Arquitetura *(opcional)*",
-            "",
-            "[Padrões introduzidos, refatorações, mudanças de design. Omita se não houver.]",
-            "",
-            "### CI/CD & Qualidade *(opcional)*",
-            "",
-            "[Status dos pipelines, testes, deploys. Omita se não houver dados.]",
-            "",
-            "### Débito Técnico / Riscos *(opcional)*",
-            "",
-            "[Apenas se claramente visível nos dados. Omita se não houver evidência.]",
-            "```",
-            "",
-            "**Regras:** máximo 200 palavras. Linguagem precisa para desenvolvedores. "
-            "Retorne APENAS o relatório formatado.",
+            "Gere um relatório técnico em pt-BR com Alterações, Decisões de Arquitetura, CI/CD e Riscos quando sustentados pelos dados. Máximo 250 palavras. Retorne apenas o relatório.",
         ]
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # Section formatters
-    # ------------------------------------------------------------------
 
     def _section_commits_summary(self, commits: list[dict]) -> str:
         if not commits:
             return "## Commits\nNenhum commit no período."
         lines = [f"## Commits ({len(commits)})"]
-        for c in commits:
+        for commit in commits:
             lines.append(
-                f"- `{c.get('short_sha', '')}` {c.get('subject', '')} *(by {c.get('author', '')})*"
+                f"- `{commit.get('short_sha', '')}` {commit.get('subject', '')} *(por {commit.get('author', '')})*"
             )
         return "\n".join(lines)
 
@@ -142,63 +137,61 @@ class ContextBuilder:
         if not commits:
             return "## Commits\nNenhum commit no período."
         lines = [f"## Commits ({len(commits)})"]
-        for c in commits:
-            entry = f"- `{c.get('short_sha', '')}` **{c.get('subject', '')}** — by {c.get('author', '')}"
-            body = c.get("body", "").strip()
+        for commit in commits:
+            entry = f"- `{commit.get('short_sha', '')}` **{commit.get('subject', '')}** — {commit.get('author', '')}"
+            body = str(commit.get("body") or "").strip()
             if body:
                 entry += f"\n  > {body[:150]}"
             lines.append(entry)
         return "\n".join(lines)
 
-    def _section_prs(self, prs: list[dict]) -> str:
-        if not prs:
+    def _section_prs(self, items: list[dict]) -> str:
+        if not items:
             return ""
-        lines = [f"## Pull Requests ({len(prs)})"]
-        for pr in prs:
-            state = pr.get("state", "open").upper()
-            labels = f" [{', '.join(pr['labels'])}]" if pr.get("labels") else ""
+        lines = [f"## Pull Requests ({len(items)})"]
+        for item in items:
+            labels = f" [{', '.join(item['labels'])}]" if item.get("labels") else ""
             lines.append(
-                f"- **#{pr['number']}** {pr.get('title', '')} — {state}{labels} *(by {pr.get('author', '')})*"
+                f"- **#{item['number']}** {item.get('title', '')} — {item.get('state', '').upper()}{labels} *(por {item.get('author', '')})*"
             )
-            body = pr.get("body", "").strip()
+            body = str(item.get("body") or "").strip()
             if body:
                 lines.append(f"  > {body[:150]}")
         return "\n".join(lines)
 
-    def _section_issues(self, issues: list[dict]) -> str:
-        if not issues:
+    def _section_issues(self, items: list[dict]) -> str:
+        if not items:
             return ""
-        lines = [f"## Issues ({len(issues)})"]
-        for issue in issues:
-            state = issue.get("state", "open").upper()
-            labels = f" [{', '.join(issue['labels'])}]" if issue.get("labels") else ""
+        lines = [f"## Issues ({len(items)})"]
+        for item in items:
+            labels = f" [{', '.join(item['labels'])}]" if item.get("labels") else ""
             lines.append(
-                f"- **#{issue['number']}** {issue.get('title', '')} — {state}{labels} *(by {issue.get('author', '')})*"
+                f"- **#{item['number']}** {item.get('title', '')} — {item.get('state', '').upper()}{labels} *(por {item.get('author', '')})*"
             )
         return "\n".join(lines)
 
-    def _section_workflows(self, runs: list[dict]) -> str:
-        if not runs:
+    def _section_workflows(self, items: list[dict]) -> str:
+        if not items:
             return ""
-        lines = [f"## CI/CD — Workflow Runs ({len(runs)})"]
-        for run in runs:
-            conclusion = run.get("conclusion", "in_progress").upper()
-            branch = run.get("branch", "")
-            subject = run.get("commit_subject", "")
+        lines = [f"## CI/CD ({len(items)})"]
+        for item in items:
+            subject = item.get("commit_subject", "")
             lines.append(
-                f"- **{run.get('name', '')}** [{branch}] → {conclusion}"
-                + (f" | commit: {subject}" if subject else "")
+                f"- **{item.get('name', '')}** [{item.get('branch', '')}] → {item.get('conclusion', 'in_progress').upper()}"
+                + (f" | {subject}" if subject else "")
             )
         return "\n".join(lines)
 
-    def _section_releases(self, releases: list[dict]) -> str:
-        if not releases:
+    def _section_releases(self, items: list[dict]) -> str:
+        if not items:
             return ""
-        lines = [f"## Releases ({len(releases)})"]
-        for rel in releases:
-            pre = " *(pre-release)*" if rel.get("prerelease") else ""
-            lines.append(f"- **{rel.get('tag', '')}** — {rel.get('name', '')}{pre} by {rel.get('author', '')}")
-            body = rel.get("body", "").strip()
+        lines = [f"## Releases ({len(items)})"]
+        for item in items:
+            pre = " *(pré-release)*" if item.get("prerelease") else ""
+            lines.append(
+                f"- **{item.get('tag', '')}** — {item.get('name', '')}{pre} por {item.get('author', '')}"
+            )
+            body = str(item.get("body") or "").strip()
             if body:
                 lines.append(f"  > {body[:200]}")
         return "\n".join(lines)

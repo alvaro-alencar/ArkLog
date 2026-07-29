@@ -1,62 +1,119 @@
-"""Tests for the report scheduler job registration."""
+"""Tests for trusted report scheduler job registration."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from app.domain.entities.project import Project
+import pytest
+
 from app.schedulers.report_scheduler import register_project_schedules
 
 
-SAMPLE_PROJECTS = [
-    Project(
-        name="SmartEAD",
-        repo_owner="my-org",
-        repo_name="smartead",
-        clickup_task_id="abc123",
-        schedule=("09:00", "18:00"),
-    ),
-    Project(
-        name="NexusAI",
-        repo_owner="my-org",
-        repo_name="nexus-ai",
-        clickup_task_id="def456",
-        schedule=("12:00",),
-    ),
-]
+class FakeSession:
+    def __init__(self, access: object | None) -> None:
+        self.access = access
+
+    async def __aenter__(self) -> "FakeSession":
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def scalar(self, _statement: object) -> object | None:
+        return self.access
 
 
-def test_register_creates_correct_job_count():
-    mock_scheduler = MagicMock()
+class FakeSessionFactory:
+    def __init__(self, access: object | None) -> None:
+        self.access = access
+
+    def __call__(self) -> FakeSession:
+        return FakeSession(self.access)
+
+
+def daily_destination(destination_id: int, *times: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=destination_id,
+        schedule="daily",
+        times=list(times),
+        day="friday",
+        time="18:00",
+    )
+
+
+def weekly_destination(destination_id: int, day: str, time: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=destination_id,
+        schedule="weekly",
+        times=[],
+        day=day,
+        time=time,
+    )
+
+
+@pytest.mark.asyncio
+async def test_registers_only_trusted_admin_schedules() -> None:
+    project = SimpleNamespace(
+        id=7,
+        user_id=11,
+        destinations=[
+            daily_destination(21, "09:00", "18:00"),
+            weekly_destination(22, "friday", "17:30"),
+        ],
+    )
+    scheduler = MagicMock()
+    repository = MagicMock()
+    repository.get_all_active.return_value = [project]
+
     with (
-        patch("app.schedulers.report_scheduler.scheduler", mock_scheduler),
-        patch("app.schedulers.report_scheduler.projects_config") as mock_config,
+        patch(
+            "app.schedulers.report_scheduler.AsyncSessionLocal",
+            FakeSessionFactory(SimpleNamespace(status="ACTIVE", is_admin=True)),
+        ),
+        patch("app.schedulers.report_scheduler.ProjectRepository", return_value=repository),
+        patch("app.schedulers.report_scheduler.scheduler", scheduler),
     ):
-        mock_config.projects = SAMPLE_PROJECTS
-        register_project_schedules()
+        await register_project_schedules()
 
-    # SmartEAD: 2 jobs, NexusAI: 1 job = 3 total
-    assert mock_scheduler.add_job.call_count == 3
+    assert scheduler.add_job.call_count == 3
+    calls = scheduler.add_job.call_args_list
+    assert all(call.kwargs["trigger"] == "cron" for call in calls)
+    assert calls[0].kwargs["args"] == [7, 21, "daily_scheduled"]
+    assert calls[2].kwargs["args"] == [7, 22, "weekly_scheduled"]
+    assert calls[2].kwargs["day_of_week"] == "fri"
 
 
-def test_register_uses_cron_trigger():
-    mock_scheduler = MagicMock()
+@pytest.mark.asyncio
+async def test_does_not_register_jobs_without_authorized_admin_access() -> None:
+    project = SimpleNamespace(
+        id=7,
+        user_id=11,
+        destinations=[daily_destination(21, "09:00")],
+    )
+    scheduler = MagicMock()
+    repository = MagicMock()
+    repository.get_all_active.return_value = [project]
+
     with (
-        patch("app.schedulers.report_scheduler.scheduler", mock_scheduler),
-        patch("app.schedulers.report_scheduler.projects_config") as mock_config,
+        patch("app.schedulers.report_scheduler.AsyncSessionLocal", FakeSessionFactory(None)),
+        patch("app.schedulers.report_scheduler.ProjectRepository", return_value=repository),
+        patch("app.schedulers.report_scheduler.scheduler", scheduler),
     ):
-        mock_config.projects = SAMPLE_PROJECTS
-        register_project_schedules()
+        await register_project_schedules()
 
-    for call in mock_scheduler.add_job.call_args_list:
-        assert call.kwargs["trigger"] == "cron"
+    scheduler.add_job.assert_not_called()
 
 
-def test_register_no_projects_creates_no_jobs():
-    mock_scheduler = MagicMock()
+@pytest.mark.asyncio
+async def test_no_projects_creates_no_jobs() -> None:
+    scheduler = MagicMock()
+    repository = MagicMock()
+    repository.get_all_active.return_value = []
+
     with (
-        patch("app.schedulers.report_scheduler.scheduler", mock_scheduler),
-        patch("app.schedulers.report_scheduler.projects_config") as mock_config,
+        patch("app.schedulers.report_scheduler.AsyncSessionLocal", FakeSessionFactory(None)),
+        patch("app.schedulers.report_scheduler.ProjectRepository", return_value=repository),
+        patch("app.schedulers.report_scheduler.scheduler", scheduler),
     ):
-        mock_config.projects = []
-        register_project_schedules()
+        await register_project_schedules()
 
-    mock_scheduler.add_job.assert_not_called()
+    scheduler.add_job.assert_not_called()

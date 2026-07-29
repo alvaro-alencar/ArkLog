@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.ai.report_generator import ReportGenerator
@@ -24,7 +24,6 @@ from app.models.tables import (
     IntegrationConnectionRecord,
     ReportPublicationRecord,
     ReportRecord,
-    ReportUsageRecord,
 )
 from app.security.access import complete_usage, fail_usage, reserve_report
 from app.security.ark_auth import ArkIdentity
@@ -94,6 +93,84 @@ async def _flow_query(flow_id: int, identity: ArkIdentity) -> AutomationFlowReco
     return flow
 
 
+async def _create_pending_report(
+    *,
+    flow: AutomationFlowRecord,
+    content: str,
+    summary: str,
+    commit_count: int,
+) -> tuple[int, int]:
+    """Persist the generated artifact before any external side effect."""
+    target_id = str(flow.destination_config.get("channel") or "")
+    async with AsyncSessionLocal() as session, session.begin():
+        report = ReportRecord(
+            trigger="manual_flow",
+            status="publication_pending",
+            content=content,
+            summary=summary,
+            commit_count=commit_count,
+            flow_id=flow.id,
+            project_id=None,
+        )
+        session.add(report)
+        await session.flush()
+        publication = ReportPublicationRecord(
+            platform=flow.destination_connection.provider,
+            target_id=target_id,
+            external_id=None,
+            status="pending",
+            report_id=report.id,
+        )
+        session.add(publication)
+        await session.flush()
+        return report.id, publication.id
+
+
+async def _mark_publication_success(
+    report_id: int,
+    publication_id: int,
+    publication: dict[str, Any],
+) -> None:
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            update(ReportRecord)
+            .where(ReportRecord.id == report_id)
+            .values(status="published")
+        )
+        await session.execute(
+            update(ReportPublicationRecord)
+            .where(ReportPublicationRecord.id == publication_id)
+            .values(
+                status="success",
+                platform=publication["provider"],
+                target_id=publication["target_id"],
+                external_id=publication["external_id"],
+                error_message=None,
+                published_at=naive_utcnow(),
+            )
+        )
+
+
+async def _mark_publication_failed(
+    report_id: int | None,
+    publication_id: int | None,
+    error: str,
+) -> None:
+    if report_id is None or publication_id is None:
+        return
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            update(ReportRecord)
+            .where(ReportRecord.id == report_id)
+            .values(status="publication_failed")
+        )
+        await session.execute(
+            update(ReportPublicationRecord)
+            .where(ReportPublicationRecord.id == publication_id)
+            .values(status="failed", error_message=error[:2000])
+        )
+
+
 @router.get("")
 async def list_flows(identity: ArkIdentity = Depends(get_identity)) -> dict[str, Any]:
     _require_access(identity)
@@ -126,7 +203,10 @@ async def create_flow(
     repository = data.repository.strip()
     if repository.count("/") != 1:
         raise HTTPException(status_code=400, detail="Escolha um repositório GitHub válido.")
-    if identity.access.status == "TRIAL" and data.window_hours > settings.arklog_trial_max_window_hours:
+    if (
+        identity.access.status == "TRIAL"
+        and data.window_hours > settings.arklog_trial_max_window_hours
+    ):
         raise HTTPException(
             status_code=400,
             detail="O teste gratuito cobre no máximo sete dias por relatório.",
@@ -144,7 +224,9 @@ async def create_flow(
                     IntegrationConnectionRecord.status == "ACTIVE",
                 )
             )
-            connections = {item.id: item for item in connections_result.scalars().all()}
+            connections = {
+                item.id: item for item in connections_result.scalars().all()
+            }
             source = connections.get(data.source_connection_id)
             destination = connections.get(data.destination_connection_id)
             if source is None or destination is None:
@@ -153,9 +235,15 @@ async def create_flow(
                     detail="As duas conexões precisam pertencer à sua conta Ark.",
                 )
             if source.provider != "github":
-                raise HTTPException(status_code=400, detail="A primeira fonte disponível é o GitHub.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="A primeira fonte disponível é o GitHub.",
+                )
             if destination.provider != "slack":
-                raise HTTPException(status_code=400, detail="O primeiro destino disponível é o Slack.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="O primeiro destino disponível é o Slack.",
+                )
 
             collision = await session.scalar(
                 select(AutomationFlowRecord).where(
@@ -165,7 +253,10 @@ async def create_flow(
                 )
             )
             if collision is not None:
-                raise HTTPException(status_code=409, detail="Já existe um fluxo com este nome.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Já existe um fluxo com este nome.",
+                )
 
             flow = AutomationFlowRecord(
                 user_id=identity.user.id,
@@ -248,7 +339,10 @@ async def execute_flow(
 
     configured_window = int(flow.report_config.get("windowHours") or 168)
     window_hours = data.window_hours or configured_window
-    if identity.access.status == "TRIAL" and window_hours > settings.arklog_trial_max_window_hours:
+    if (
+        identity.access.status == "TRIAL"
+        and window_hours > settings.arklog_trial_max_window_hours
+    ):
         raise HTTPException(
             status_code=400,
             detail="O teste gratuito cobre no máximo sete dias por relatório.",
@@ -269,6 +363,9 @@ async def execute_flow(
         }
 
     since = naive_utcnow() - timedelta(hours=window_hours)
+    report_id: int | None = None
+    publication_id: int | None = None
+    publication: dict[str, Any] | None = None
     try:
         activity = await collect_source(
             flow.source_connection,
@@ -284,61 +381,48 @@ async def execute_flow(
             "tech_stack": [],
             "business_context": instructions,
             "report_style": flow.report_config.get("style", "misto"),
-            "trigger": "instant",
+            "trigger": "manual_flow",
             "access_status": identity.access.status,
             **activity,
             "commit_count": len(activity.get("commits", [])),
         }
         content, summary = await ReportGenerator().generate(payload)
+        report_id, publication_id = await _create_pending_report(
+            flow=flow,
+            content=content,
+            summary=summary,
+            commit_count=len(activity.get("commits", [])),
+        )
         publication = await publish_destination(
             flow.destination_connection,
             flow.destination_config,
             content,
+            idempotency_key=usage.id,
         )
-
-        async with AsyncSessionLocal() as session:
-            async with session.begin():
-                report = ReportRecord(
-                    trigger="manual_flow",
-                    status="generated",
-                    content=content,
-                    summary=summary,
-                    commit_count=len(activity.get("commits", [])),
-                    flow_id=flow.id,
-                    project_id=None,
-                )
-                session.add(report)
-                await session.flush()
-                session.add(
-                    ReportPublicationRecord(
-                        platform=publication["provider"],
-                        target_id=publication["target_id"],
-                        external_id=publication["external_id"],
-                        status="success",
-                        report_id=report.id,
-                    )
-                )
-                report_id = report.id
+        await _mark_publication_success(
+            report_id,
+            publication_id,
+            publication,
+        )
         await complete_usage(usage.id, report_id)
     except IntegrationRuntimeError as exc:
+        await _mark_publication_failed(report_id, publication_id, str(exc))
         await fail_usage(usage.id, str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
+        await _mark_publication_failed(report_id, publication_id, str(exc))
         await fail_usage(usage.id, str(exc))
         raise HTTPException(
             status_code=502,
             detail="O fluxo falhou sem consumir sua cota. Tente novamente.",
         ) from exc
 
-    async with AsyncSessionLocal() as session:
-        final_usage = await session.scalar(
-            select(ReportUsageRecord).where(ReportUsageRecord.id == usage.id)
-        )
+    assert report_id is not None
+    assert publication is not None
     return {
         "status": "completed",
         "usageId": usage.id,
         "reportId": report_id,
         "publication": publication,
-        "reportsUsed": final_usage.status if final_usage else "COMPLETED",
         "idempotentReplay": False,
     }

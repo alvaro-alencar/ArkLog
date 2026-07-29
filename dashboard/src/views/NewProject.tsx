@@ -21,8 +21,8 @@ const GitHubIcon = ({ size = 20, className = "" }: { size?: number, className?: 
   </svg>
 );
 
-const ClickUpIcon = ({ size = 20 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+const ClickUpIcon = ({ size = 20, className = "" }: { size?: number; className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
     <path d="M12 2L2 12l2 2 8-8 8 8 2-2L12 2zM12 22l10-10-2-2-8 8-8-8-2 2 10 10z" />
   </svg>
 );

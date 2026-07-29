@@ -12,7 +12,6 @@ from app.models.tables import ArkLogAccessRecord, ReportUsageRecord
 from app.security.ark_auth import ArkIdentity
 from app.utils.datetime_utils import naive_utcnow
 
-
 APPROVED_STATUSES = {"TRIAL", "ACTIVE"}
 
 
@@ -85,22 +84,20 @@ async def reserve_report(
 
 
 async def complete_usage(usage_id: str, report_id: int) -> None:
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            await session.execute(
-                update(ReportUsageRecord)
-                .where(ReportUsageRecord.id == usage_id)
-                .values(status="COMPLETED", report_id=report_id, completed_at=naive_utcnow())
-            )
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            update(ReportUsageRecord)
+            .where(ReportUsageRecord.id == usage_id)
+            .values(status="COMPLETED", report_id=report_id, completed_at=naive_utcnow())
+        )
 
 
 async def fail_usage(usage_id: str | None, error: str) -> None:
     if not usage_id:
         return
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            await session.execute(
-                update(ReportUsageRecord)
-                .where(ReportUsageRecord.id == usage_id)
-                .values(status="FAILED", error_message=error[:2000], completed_at=naive_utcnow())
-            )
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            update(ReportUsageRecord)
+            .where(ReportUsageRecord.id == usage_id)
+            .values(status="FAILED", error_message=error[:2000], completed_at=naive_utcnow())
+        )

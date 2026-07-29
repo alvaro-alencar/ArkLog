@@ -54,11 +54,10 @@ async def on_shutdown() -> None:
     await stop_scheduler()
 
 
-def _validate_production_config() -> None:
+def _missing_secure_configuration() -> list[str]:
+    """List missing platform secrets without exposing any secret values."""
     from app.core.config import settings
 
-    if not settings.is_production:
-        return
     missing: list[str] = []
     if not settings.ai_api_key:
         missing.append("AI_API_KEY")
@@ -72,8 +71,20 @@ def _validate_production_config() -> None:
         missing.append("OAUTH_STATE_SECRET (32+ chars)")
     if not settings.public_app_url.startswith("https://"):
         missing.append("PUBLIC_APP_URL HTTPS")
+    return missing
+
+
+def _validate_production_config() -> None:
+    from app.core.config import settings
+
+    if not settings.requires_secure_configuration:
+        return
+    missing = _missing_secure_configuration()
     if missing:
-        raise RuntimeError("Missing secure production configuration: " + ", ".join(missing))
+        logger.error("secure_configuration_missing", missing=missing)
+        raise RuntimeError(
+            "Missing secure production configuration: " + ", ".join(missing)
+        )
 
 
 async def _init_database() -> None:

@@ -4,6 +4,8 @@ Platform secrets stay on the server. Personal provider credentials are created b
 OAuth and stored encrypted per Ark user and organization.
 """
 
+import os
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,7 +20,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "ArkLog"
-    app_version: str = "0.3.0"
+    app_version: str = "0.3.1"
     app_env: str = Field(default="development")
     debug: bool = Field(default=False)
     public_app_url: str = Field(default="http://localhost:5173")
@@ -104,8 +106,17 @@ class Settings(BaseSettings):
         return self.app_env == "production"
 
     @property
+    def is_cloud(self) -> bool:
+        """Return true on Vercel even when APP_ENV was accidentally omitted."""
+        return bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV"))
+
+    @property
+    def requires_secure_configuration(self) -> bool:
+        return self.is_production or self.is_cloud
+
+    @property
     def is_development(self) -> bool:
-        return self.app_env == "development"
+        return self.app_env == "development" and not self.is_cloud
 
     @property
     def admin_email_set(self) -> set[str]:

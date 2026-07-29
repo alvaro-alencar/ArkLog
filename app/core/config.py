@@ -32,13 +32,13 @@ class Settings(BaseSettings):
     ark_auth_me_url: str = Field(
         default="https://www.arksystem.net/api/saas?action=me"
     )
-    ark_auth_timeout_seconds: float = Field(default=8.0)
+    ark_auth_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
     arklog_admin_emails: str = Field(default="")
     arklog_auto_trial: bool = Field(default=False)
-    arklog_trial_report_limit: int = Field(default=1)
-    arklog_active_report_limit: int = Field(default=50)
-    arklog_trial_max_window_hours: int = Field(default=168)
-    arklog_trial_max_projects: int = Field(default=1)
+    arklog_trial_report_limit: int = Field(default=1, ge=0, le=1)
+    arklog_active_report_limit: int = Field(default=50, ge=-1)
+    arklog_trial_max_window_hours: int = Field(default=168, ge=1, le=168)
+    arklog_trial_max_projects: int = Field(default=1, ge=1, le=1)
 
     # GitHub
     github_webhook_secret: str = Field(default="")
@@ -61,12 +61,12 @@ class Settings(BaseSettings):
     ai_base_url: str = Field(default="https://openrouter.ai/api/v1")
     ai_model: str = Field(default="google/gemini-2.5-flash")
     ai_trial_model: str = Field(default="google/gemini-2.5-flash")
-    ai_max_tokens: int = Field(default=2000)
-    ai_max_tokens_backfill: int = Field(default=8000)
-    ai_trial_max_tokens: int = Field(default=1200)
-    ai_temperature: float = Field(default=0.3)
-    ai_max_prompt_chars: int = Field(default=120_000)
-    ai_trial_max_prompt_chars: int = Field(default=30_000)
+    ai_max_tokens: int = Field(default=2000, ge=1, le=16000)
+    ai_max_tokens_backfill: int = Field(default=8000, ge=1, le=32000)
+    ai_trial_max_tokens: int = Field(default=1200, ge=1, le=1200)
+    ai_temperature: float = Field(default=0.3, ge=0, le=1)
+    ai_max_prompt_chars: int = Field(default=120_000, ge=1, le=500_000)
+    ai_trial_max_prompt_chars: int = Field(default=30_000, ge=1, le=30_000)
 
     # ClickUp
     clickup_api_token: str = Field(default="")
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = Field(default=False)
     scheduler_timezone: str = Field(default="America/Sao_Paulo")
 
-    max_commits_per_webhook: int = Field(default=50)
+    max_commits_per_webhook: int = Field(default=50, ge=1, le=100)
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="json")
 

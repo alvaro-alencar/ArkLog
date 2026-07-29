@@ -1,7 +1,7 @@
-"""
-ArkLog - Application Configuration.
+"""ArkLog application configuration.
 
-All secrets remain server-side. The web client never receives the OpenRouter key.
+Platform secrets stay on the server. Personal provider credentials are created by
+OAuth and stored encrypted per Ark user and organization.
 """
 
 from pydantic import Field
@@ -18,14 +18,16 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "ArkLog"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     app_env: str = Field(default="development")
     debug: bool = Field(default=False)
+    public_app_url: str = Field(default="http://localhost:5173")
 
     # API server
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
     api_prefix: str = "/api/v1"
+    public_api_prefix: str = "/api/arklog/v1"
     cors_origins: list[str] = Field(default=["http://localhost:5173"])
 
     # Shared Ark account identity provider
@@ -40,23 +42,32 @@ class Settings(BaseSettings):
     arklog_trial_max_window_hours: int = Field(default=168, ge=1, le=168)
     arklog_trial_max_projects: int = Field(default=1, ge=1, le=1)
 
-    # GitHub
-    github_webhook_secret: str = Field(default="")
-    github_token: str = Field(default="")
+    # Credential vault and signed OAuth state. These belong to ArkLog, not to a user.
+    connections_encryption_key: str = Field(default="")
+    oauth_state_secret: str = Field(default="")
+    oauth_state_ttl_seconds: int = Field(default=600, ge=120, le=1800)
+
+    # GitHub OAuth application. The resulting token belongs to the connected user.
     github_client_id: str = Field(default="")
     github_client_secret: str = Field(default="")
-    github_redirect_uri: str = Field(default="http://localhost:5173/auth/callback")
+    github_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/github/callback"
+    )
 
-    # Legacy JWT settings kept only for backward-compatible configuration parsing.
-    # ArkLog no longer accepts these tokens for application access.
-    jwt_secret: str = Field(default="change-me-in-production")
-    jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24 * 7
+    # Slack OAuth application. The resulting bot token belongs to the connected workspace.
+    slack_client_id: str = Field(default="")
+    slack_client_secret: str = Field(default="")
+    slack_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/slack/callback"
+    )
+
+    # Legacy webhook parsing remains available, but it has no owner access token.
+    github_webhook_secret: str = Field(default="")
 
     # Database
     database_url: str = Field(default="sqlite+aiosqlite:///./data/arklog.db")
 
-    # AI provider
+    # AI provider. This is the metered platform service sold by ArkLog.
     ai_api_key: str = Field(default="")
     ai_base_url: str = Field(default="https://openrouter.ai/api/v1")
     ai_model: str = Field(default="google/gemini-2.5-flash")
@@ -68,14 +79,13 @@ class Settings(BaseSettings):
     ai_max_prompt_chars: int = Field(default=120_000, ge=1, le=500_000)
     ai_trial_max_prompt_chars: int = Field(default=30_000, ge=1, le=30_000)
 
-    # ClickUp
-    clickup_api_token: str = Field(default="")
-    clickup_team_id: str = Field(default="")
-    clickup_base_url: str = "https://api.clickup.com/api/v2"
+    # Provider base URLs contain no account credentials.
+    github_api_base_url: str = "https://api.github.com"
+    slack_api_base_url: str = "https://slack.com/api"
 
     projects_config_path: str = Field(default="projects.yaml")
 
-    # Scheduler. Keep disabled on serverless replicas.
+    # Scheduling will be reintroduced through a single external scheduler/queue.
     scheduler_enabled: bool = Field(default=False)
     scheduler_timezone: str = Field(default="America/Sao_Paulo")
 

@@ -10,20 +10,20 @@ from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
-_PROMPT_BASE = """Você é um gerente técnico sênior gerando relatórios de progresso de projetos de software.
+_PROMPT_BASE = """Você é um gerente sênior transformando atividade operacional em um relatório de progresso.
 
-Você receberá dados de atividade do GitHub: commits, pull requests, issues, execuções de CI/CD e releases.
-Use apenas os dados fornecidos.
+Você receberá eventos coletados e normalizados pelo ArkLog. Eles podem vir de GitHub, Slack, Notion, ClickUp ou outros conectores.
+Use apenas os dados fornecidos, independentemente da plataforma de origem.
 
 Regras obrigatórias:
 - Escreva sempre em português do Brasil
 - Use Markdown com títulos e destaques moderados
-- Nunca invente arquivos, funcionalidades ou decisões
-- Cada afirmação deve ser verificável nos dados
-- Separe o que foi concluído, o que está em andamento e possíveis pendências
+- Nunca invente arquivos, funcionalidades, decisões, responsáveis ou resultados
+- Cada afirmação deve ser verificável nos eventos recebidos
+- Separe o que foi concluído, o que está em andamento e possíveis pendências somente quando houver evidência
 """
 
-SYSTEM_PROMPT = _PROMPT_BASE + "\n- Seja conciso. Máximo 150 palavras."
+SYSTEM_PROMPT = _PROMPT_BASE + "\n- Seja conciso. Máximo 220 palavras."
 WEEKLY_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Seja detalhado. Máximo 400 palavras."
 BACKFILL_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Organize a evolução histórica. Máximo 800 palavras."
 TRIAL_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Este é um relatório demonstrativo. Máximo 180 palavras."

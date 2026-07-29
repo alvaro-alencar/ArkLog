@@ -1,10 +1,6 @@
-"""
-ArkLog - GitHub REST API Client
+"""GitHub REST client with per-request credentials and bounded trial reads."""
 
-Fetches full project activity: commits, PRs, issues, CI workflow runs, releases.
-Uses Personal Access Token if configured (required for private repos and Actions API).
-Rate limit: 60 req/h unauthenticated, 5000 req/h with token.
-"""
+from __future__ import annotations
 
 import asyncio
 from datetime import datetime
@@ -18,51 +14,74 @@ from app.domain.entities.commit import Commit
 from app.utils.datetime_utils import parse_github_timestamp
 
 logger = structlog.get_logger(__name__)
-
 _GITHUB_API = "https://api.github.com"
 _PER_PAGE = 100
 
 
-def _headers() -> dict[str, str]:
-    h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-    if settings.github_token:
-        h["Authorization"] = f"Bearer {settings.github_token}"
-    return h
+def _headers(token: str | None = None, use_global_token: bool = True) -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "ArkLog/0.2",
+    }
+    effective_token = token or (settings.github_token if use_global_token else "")
+    if effective_token:
+        headers["Authorization"] = f"Bearer {effective_token}"
+    return headers
 
 
 def _fmt_since(since: datetime) -> str:
     return since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# ---------------------------------------------------------------------------
-# Commits
-# ---------------------------------------------------------------------------
+async def fetch_repository_metadata(
+    owner: str,
+    repo: str,
+    *,
+    token: str | None = None,
+    use_global_token: bool = True,
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(
+        headers=_headers(token, use_global_token), timeout=20.0
+    ) as client:
+        response = await client.get(f"{_GITHUB_API}/repos/{owner}/{repo}")
+    if response.status_code == 404:
+        raise RuntimeError(f"Repository {owner}/{repo} not found or not accessible.")
+    response.raise_for_status()
+    return response.json()
 
-async def fetch_commits_since(owner: str, repo: str, since: datetime | None = None) -> list[Commit]:
-    """Fetch commits since a specific datetime (or all if since=None)."""
+
+async def fetch_commits_since(
+    owner: str,
+    repo: str,
+    since: datetime | None = None,
+    *,
+    token: str | None = None,
+    use_global_token: bool = True,
+    max_pages: int | None = None,
+) -> list[Commit]:
     commits: list[Commit] = []
-    repo_full_name = f"{owner}/{repo}"
     page = 1
-    params: dict = {"per_page": _PER_PAGE}
+    params: dict[str, Any] = {"per_page": _PER_PAGE}
     if since:
         params["since"] = _fmt_since(since)
 
-    async with httpx.AsyncClient(headers=_headers(), timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        headers=_headers(token, use_global_token), timeout=30.0
+    ) as client:
         while True:
             response = await client.get(
                 f"{_GITHUB_API}/repos/{owner}/{repo}/commits",
                 params={**params, "page": page},
             )
-            if response.status_code == 401:
-                raise RuntimeError(f"GitHub API 401 for {repo_full_name}. Set GITHUB_TOKEN for private repos.")
+            if response.status_code in (401, 403):
+                raise RuntimeError(f"GitHub access denied for {owner}/{repo}.")
             if response.status_code == 404:
-                raise RuntimeError(f"Repository {repo_full_name} not found.")
+                raise RuntimeError(f"Repository {owner}/{repo} not found.")
             response.raise_for_status()
-
             items = response.json()
             if not items:
                 break
-
             for item in items:
                 git = item.get("commit", {})
                 author = git.get("author") or git.get("committer") or {}
@@ -74,197 +93,243 @@ async def fetch_commits_since(owner: str, repo: str, since: datetime | None = No
                         author_email=author.get("email", ""),
                         timestamp=parse_github_timestamp(author.get("date", "")),
                         url=item.get("html_url", ""),
-                        repo_full_name=repo_full_name,
+                        repo_full_name=f"{owner}/{repo}",
                         branch="",
                         files=(),
                     )
                 )
-
-            if len(items) < _PER_PAGE:
+            if len(items) < _PER_PAGE or (max_pages and page >= max_pages):
                 break
             page += 1
-
-    logger.info("github_api_commits_fetched", repo=repo_full_name, total=len(commits), since=since)
     return commits
 
 
-async def fetch_all_commits(owner: str, repo: str) -> list[Commit]:
-    """Fetch every commit in a repository (paginated). Used for backfill."""
-    return await fetch_commits_since(owner, repo, since=None)
+async def fetch_all_commits(
+    owner: str,
+    repo: str,
+    *,
+    token: str | None = None,
+    use_global_token: bool = True,
+) -> list[Commit]:
+    return await fetch_commits_since(
+        owner, repo, token=token, use_global_token=use_global_token
+    )
 
 
-# ---------------------------------------------------------------------------
-# Pull Requests & Issues  (GitHub issues endpoint returns both)
-# ---------------------------------------------------------------------------
-
-async def _fetch_issues_and_prs(owner: str, repo: str, since: datetime | None) -> list[dict[str, Any]]:
-    params: dict = {"state": "all", "per_page": _PER_PAGE, "sort": "updated", "direction": "desc"}
+async def _fetch_issues_and_prs(
+    owner: str,
+    repo: str,
+    since: datetime | None,
+    *,
+    token: str | None,
+    use_global_token: bool,
+    max_pages: int | None,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {
+        "state": "all",
+        "per_page": _PER_PAGE,
+        "sort": "updated",
+        "direction": "desc",
+    }
     if since:
         params["since"] = _fmt_since(since)
-
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
     page = 1
-    async with httpx.AsyncClient(headers=_headers(), timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        headers=_headers(token, use_global_token), timeout=30.0
+    ) as client:
         while True:
-            r = await client.get(
+            response = await client.get(
                 f"{_GITHUB_API}/repos/{owner}/{repo}/issues",
                 params={**params, "page": page},
             )
-            if r.status_code in (401, 403, 404, 410):
-                logger.debug("github_issues_unavailable", status=r.status_code, repo=f"{owner}/{repo}")
+            if response.status_code in (401, 403, 404, 410):
                 return []
-            r.raise_for_status()
-            data = r.json()
+            response.raise_for_status()
+            data = response.json()
             if not data:
                 break
             items.extend(data)
-            if len(data) < _PER_PAGE:
+            if len(data) < _PER_PAGE or (max_pages and page >= max_pages):
                 break
             page += 1
     return items
 
 
-# ---------------------------------------------------------------------------
-# CI / Workflow runs
-# ---------------------------------------------------------------------------
-
-async def _fetch_workflow_runs(owner: str, repo: str, since: datetime | None) -> list[dict[str, Any]]:
-    params: dict = {"per_page": 50}
+async def _fetch_workflow_runs(
+    owner: str,
+    repo: str,
+    since: datetime | None,
+    *,
+    token: str | None,
+    use_global_token: bool,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"per_page": 50}
     if since:
         params["created"] = f">={_fmt_since(since)}"
-
-    async with httpx.AsyncClient(headers=_headers(), timeout=30.0) as client:
-        r = await client.get(
-            f"{_GITHUB_API}/repos/{owner}/{repo}/actions/runs",
-            params=params,
+    async with httpx.AsyncClient(
+        headers=_headers(token, use_global_token), timeout=30.0
+    ) as client:
+        response = await client.get(
+            f"{_GITHUB_API}/repos/{owner}/{repo}/actions/runs", params=params
         )
-        if r.status_code in (401, 403, 404):
-            logger.debug("github_actions_unavailable", status=r.status_code, repo=f"{owner}/{repo}")
-            return []
-        r.raise_for_status()
-        return r.json().get("workflow_runs", [])
+    if response.status_code in (401, 403, 404):
+        return []
+    response.raise_for_status()
+    return response.json().get("workflow_runs", [])
 
 
-# ---------------------------------------------------------------------------
-# Releases
-# ---------------------------------------------------------------------------
-
-async def _fetch_releases(owner: str, repo: str, since: datetime | None) -> list[dict[str, Any]]:
-    async with httpx.AsyncClient(headers=_headers(), timeout=30.0) as client:
-        r = await client.get(
-            f"{_GITHUB_API}/repos/{owner}/{repo}/releases",
-            params={"per_page": 20},
+async def _fetch_releases(
+    owner: str,
+    repo: str,
+    since: datetime | None,
+    *,
+    token: str | None,
+    use_global_token: bool,
+) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(
+        headers=_headers(token, use_global_token), timeout=30.0
+    ) as client:
+        response = await client.get(
+            f"{_GITHUB_API}/repos/{owner}/{repo}/releases", params={"per_page": 20}
         )
-        if r.status_code in (401, 403, 404):
-            return []
-        r.raise_for_status()
-        releases = r.json()
-
+    if response.status_code in (401, 403, 404):
+        return []
+    response.raise_for_status()
+    releases = response.json()
     if since:
         releases = [
-            rel for rel in releases
-            if rel.get("published_at") and parse_github_timestamp(rel["published_at"]) >= since
+            release
+            for release in releases
+            if release.get("published_at")
+            and parse_github_timestamp(release["published_at"]) >= since
         ]
     return releases
 
 
-# ---------------------------------------------------------------------------
-# Unified activity fetch
-# ---------------------------------------------------------------------------
-
 async def fetch_github_activity(
-    owner: str, repo: str, since: datetime | None = None
+    owner: str,
+    repo: str,
+    since: datetime | None = None,
+    *,
+    token: str | None = None,
+    use_global_token: bool = True,
+    trial_limits: bool = False,
 ) -> dict[str, Any]:
-    """
-    Fetch all relevant GitHub activity in parallel.
-    Returns a structured dict ready for the AI context builder.
-    """
-    commits_raw, issues_prs_raw, workflows_raw, releases_raw = await asyncio.gather(
-        fetch_commits_since(owner, repo, since),
-        _fetch_issues_and_prs(owner, repo, since),
-        _fetch_workflow_runs(owner, repo, since),
-        _fetch_releases(owner, repo, since),
+    max_pages = 1 if trial_limits else None
+    commits_raw, issues_raw, workflows_raw, releases_raw = await asyncio.gather(
+        fetch_commits_since(
+            owner,
+            repo,
+            since,
+            token=token,
+            use_global_token=use_global_token,
+            max_pages=max_pages,
+        ),
+        _fetch_issues_and_prs(
+            owner,
+            repo,
+            since,
+            token=token,
+            use_global_token=use_global_token,
+            max_pages=max_pages,
+        ),
+        _fetch_workflow_runs(
+            owner, repo, since, token=token, use_global_token=use_global_token
+        ),
+        _fetch_releases(
+            owner, repo, since, token=token, use_global_token=use_global_token
+        ),
         return_exceptions=True,
     )
 
-    # --- Commits ---
-    commits: list[dict] = []
+    commits: list[dict[str, Any]] = []
     if not isinstance(commits_raw, Exception):
-        for c in commits_raw:
-            lines = c.message.split("\n")
-            commits.append({
-                "sha": c.sha,
-                "short_sha": c.sha[:7],
-                "subject": lines[0],
-                "body": "\n".join(lines[1:]).strip(),
-                "author": c.author_name,
-                "committed_at": c.timestamp.isoformat() if c.timestamp else "",
-            })
-    elif isinstance(commits_raw, Exception):
-        logger.warning("fetch_commits_failed", error=str(commits_raw))
+        for commit in commits_raw:
+            lines = commit.message.split("\n")
+            commits.append(
+                {
+                    "sha": commit.sha,
+                    "short_sha": commit.sha[:7],
+                    "subject": lines[0],
+                    "body": "\n".join(lines[1:]).strip(),
+                    "author": commit.author_name,
+                    "committed_at": commit.timestamp.isoformat() if commit.timestamp else "",
+                }
+            )
+    else:
+        raise commits_raw
 
-    # --- PRs and Issues ---
-    pull_requests: list[dict] = []
-    issues: list[dict] = []
-    if not isinstance(issues_prs_raw, Exception):
-        for item in issues_prs_raw:
-            labels = [lbl["name"] for lbl in item.get("labels", [])]
+    pull_requests: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    if not isinstance(issues_raw, Exception):
+        for item in issues_raw:
+            labels = [label["name"] for label in item.get("labels", [])]
             if "pull_request" in item:
                 pr = item["pull_request"]
-                pull_requests.append({
-                    "number": item["number"],
-                    "title": item["title"],
-                    "state": "merged" if pr.get("merged_at") else item["state"],
-                    "author": (item.get("user") or {}).get("login", "unknown"),
-                    "created_at": item.get("created_at", ""),
-                    "closed_at": item.get("closed_at"),
-                    "merged_at": pr.get("merged_at"),
-                    "labels": labels,
-                    "body": (item.get("body") or "")[:300],
-                })
+                pull_requests.append(
+                    {
+                        "number": item["number"],
+                        "title": item["title"],
+                        "state": "merged" if pr.get("merged_at") else item["state"],
+                        "author": (item.get("user") or {}).get("login", "unknown"),
+                        "created_at": item.get("created_at", ""),
+                        "closed_at": item.get("closed_at"),
+                        "merged_at": pr.get("merged_at"),
+                        "labels": labels,
+                        "body": (item.get("body") or "")[:300],
+                    }
+                )
             else:
-                issues.append({
-                    "number": item["number"],
-                    "title": item["title"],
-                    "state": item["state"],
-                    "author": (item.get("user") or {}).get("login", "unknown"),
-                    "created_at": item.get("created_at", ""),
-                    "closed_at": item.get("closed_at"),
-                    "labels": labels,
-                    "body": (item.get("body") or "")[:200],
-                })
-    elif isinstance(issues_prs_raw, Exception):
-        logger.warning("fetch_issues_prs_failed", error=str(issues_prs_raw))
+                issues.append(
+                    {
+                        "number": item["number"],
+                        "title": item["title"],
+                        "state": item["state"],
+                        "author": (item.get("user") or {}).get("login", "unknown"),
+                        "created_at": item.get("created_at", ""),
+                        "closed_at": item.get("closed_at"),
+                        "labels": labels,
+                        "body": (item.get("body") or "")[:200],
+                    }
+                )
 
-    # --- Workflow runs ---
-    workflow_runs: list[dict] = []
+    workflow_runs: list[dict[str, Any]] = []
     if not isinstance(workflows_raw, Exception):
         for run in workflows_raw:
-            workflow_runs.append({
-                "name": run.get("name", ""),
-                "status": run.get("status", ""),
-                "conclusion": run.get("conclusion") or "in_progress",
-                "created_at": run.get("created_at", ""),
-                "branch": run.get("head_branch", ""),
-                "commit_subject": (run.get("head_commit") or {}).get("message", "").split("\n")[0][:80],
-            })
-    elif isinstance(workflows_raw, Exception):
-        logger.warning("fetch_workflows_failed", error=str(workflows_raw))
+            workflow_runs.append(
+                {
+                    "name": run.get("name", ""),
+                    "status": run.get("status", ""),
+                    "conclusion": run.get("conclusion") or "in_progress",
+                    "created_at": run.get("created_at", ""),
+                    "branch": run.get("head_branch", ""),
+                    "commit_subject": (run.get("head_commit") or {})
+                    .get("message", "")
+                    .split("\n")[0][:80],
+                }
+            )
 
-    # --- Releases ---
-    releases: list[dict] = []
+    releases: list[dict[str, Any]] = []
     if not isinstance(releases_raw, Exception):
-        for rel in releases_raw:
-            releases.append({
-                "tag": rel.get("tag_name", ""),
-                "name": rel.get("name") or rel.get("tag_name", ""),
-                "author": (rel.get("author") or {}).get("login", "unknown"),
-                "published_at": rel.get("published_at", ""),
-                "prerelease": rel.get("prerelease", False),
-                "body": (rel.get("body") or "")[:300],
-            })
-    elif isinstance(releases_raw, Exception):
-        logger.warning("fetch_releases_failed", error=str(releases_raw))
+        for release in releases_raw:
+            releases.append(
+                {
+                    "tag": release.get("tag_name", ""),
+                    "name": release.get("name") or release.get("tag_name", ""),
+                    "author": (release.get("author") or {}).get("login", "unknown"),
+                    "published_at": release.get("published_at", ""),
+                    "prerelease": release.get("prerelease", False),
+                    "body": (release.get("body") or "")[:300],
+                }
+            )
+
+    if trial_limits:
+        commits = commits[:100]
+        pull_requests = pull_requests[:50]
+        issues = issues[:50]
+        workflow_runs = workflow_runs[:30]
+        releases = releases[:20]
 
     logger.info(
         "github_activity_fetched",
@@ -274,8 +339,8 @@ async def fetch_github_activity(
         issues=len(issues),
         workflows=len(workflow_runs),
         releases=len(releases),
+        trial_limits=trial_limits,
     )
-
     return {
         "commits": commits,
         "pull_requests": pull_requests,

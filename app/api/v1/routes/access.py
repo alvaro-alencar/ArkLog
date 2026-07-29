@@ -77,10 +77,17 @@ async def _change_access(user_id: int, action: str) -> dict:
                 )
 
             if action == "trial":
+                if access.trial_granted_at is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="O relatório gratuito já foi concedido a este usuário.",
+                    )
+                now = naive_utcnow()
                 access.status = "TRIAL"
-                access.report_limit = settings.arklog_trial_report_limit
+                access.report_limit = 1
                 access.reports_used = 0
-                access.approved_at = naive_utcnow()
+                access.approved_at = now
+                access.trial_granted_at = now
                 access.blocked_reason = None
             elif action == "activate":
                 access.status = "ACTIVE"

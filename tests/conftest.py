@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api.v1.deps import get_identity
 from app.main import app
+from app.models.database import init_db
 
 
 def _test_identity() -> SimpleNamespace:
@@ -26,6 +27,7 @@ def _test_identity() -> SimpleNamespace:
             reports_used=0,
             is_admin=True,
             approved_at=None,
+            trial_granted_at=None,
             blocked_reason=None,
         ),
         ark_session={
@@ -38,6 +40,8 @@ def _test_identity() -> SimpleNamespace:
 
 @pytest.fixture
 async def client():
+    await init_db()
+
     async def override_identity() -> SimpleNamespace:
         return _test_identity()
 

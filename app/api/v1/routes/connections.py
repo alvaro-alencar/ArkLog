@@ -8,13 +8,13 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api.v1.deps import get_identity
 from app.core.config import settings
 from app.integrations.runtime import IntegrationRuntimeError, list_connection_resources
 from app.models.database import AsyncSessionLocal
-from app.models.tables import IntegrationConnectionRecord, UserRecord
+from app.models.tables import AutomationFlowRecord, IntegrationConnectionRecord, UserRecord
 from app.security.ark_auth import ArkIdentity
 from app.security.credentials import encrypt_credentials
 from app.security.oauth_state import OAuthStateError, create_oauth_state, decode_oauth_state
@@ -79,8 +79,16 @@ async def list_connections(identity: ArkIdentity = Depends(get_identity)) -> dic
     return {
         "connections": [_serialize(connection) for connection in connections],
         "providers": {
-            "github": {"configured": bool(settings.github_client_id and settings.github_client_secret)},
-            "slack": {"configured": bool(settings.slack_client_id and settings.slack_client_secret)},
+            "github": {
+                "configured": bool(
+                    settings.github_client_id and settings.github_client_secret
+                )
+            },
+            "slack": {
+                "configured": bool(
+                    settings.slack_client_id and settings.slack_client_secret
+                )
+            },
         },
     }
 
@@ -135,10 +143,12 @@ async def github_callback(code: str = Query(...), state: str = Query(...)) -> Re
         profile_response = await client.get(
             f"{settings.github_api_base_url}/user", headers=headers
         )
-        profile_response.raise_for_status()
+        if not profile_response.is_success:
+            raise HTTPException(status_code=502, detail="GitHub não retornou o perfil autorizado.")
         profile = profile_response.json()
 
-    scopes = [item.strip() for item in token_response.headers.get("X-OAuth-Scopes", "").split(",") if item.strip()]
+    scopes_value = str(token_payload.get("scope") or token_response.headers.get("X-OAuth-Scopes", ""))
+    scopes = [item.strip() for item in scopes_value.split(",") if item.strip()]
     await _upsert_connection(
         user_id=int(signed["user_id"]),
         organization_id=str(signed["organization_id"]),
@@ -146,11 +156,19 @@ async def github_callback(code: str = Query(...), state: str = Query(...)) -> Re
         label=f"GitHub · {profile.get('login')}",
         external_account_id=str(profile.get("id")),
         external_account_name=str(profile.get("login") or "GitHub"),
-        credentials={"access_token": access_token, "token_type": token_payload.get("token_type")},
+        credentials={
+            "access_token": access_token,
+            "token_type": token_payload.get("token_type"),
+        },
         scopes=scopes,
-        details={"avatarUrl": profile.get("avatar_url"), "profileUrl": profile.get("html_url")},
+        details={
+            "avatarUrl": profile.get("avatar_url"),
+            "profileUrl": profile.get("html_url"),
+        },
     )
-    return RedirectResponse(f"{settings.public_app_url.rstrip('/')}/connections?connected=github")
+    return RedirectResponse(
+        f"{settings.public_app_url.rstrip('/')}/connections?connected=github"
+    )
 
 
 @router.get("/slack/start")
@@ -193,7 +211,11 @@ async def slack_callback(code: str = Query(...), state: str = Query(...)) -> Red
         raise HTTPException(status_code=502, detail="Slack não concluiu a autorização.")
     team = payload.get("team") or {}
     authed_user = payload.get("authed_user") or {}
-    scope = [item.strip() for item in str(payload.get("scope") or "").split(",") if item.strip()]
+    scope = [
+        item.strip()
+        for item in str(payload.get("scope") or "").split(",")
+        if item.strip()
+    ]
     await _upsert_connection(
         user_id=int(signed["user_id"]),
         organization_id=str(signed["organization_id"]),
@@ -209,7 +231,9 @@ async def slack_callback(code: str = Query(...), state: str = Query(...)) -> Red
         scopes=scope,
         details={"teamId": team.get("id"), "teamName": team.get("name")},
     )
-    return RedirectResponse(f"{settings.public_app_url.rstrip('/')}/connections?connected=slack")
+    return RedirectResponse(
+        f"{settings.public_app_url.rstrip('/')}/connections?connected=slack"
+    )
 
 
 @router.get("/{connection_id}/resources")
@@ -245,10 +269,21 @@ async def disconnect(
         )
         if connection is None:
             raise HTTPException(status_code=404, detail="Conexão não encontrada.")
-        if connection.source_flows or connection.destination_flows:
+        dependent_flow = await session.scalar(
+            select(AutomationFlowRecord.id)
+            .where(
+                AutomationFlowRecord.status != "ARCHIVED",
+                or_(
+                    AutomationFlowRecord.source_connection_id == connection.id,
+                    AutomationFlowRecord.destination_connection_id == connection.id,
+                ),
+            )
+            .limit(1)
+        )
+        if dependent_flow is not None:
             raise HTTPException(
                 status_code=409,
-                detail="Exclua os fluxos que usam esta conexão antes de desconectá-la.",
+                detail="Arquive os fluxos ativos que usam esta conexão antes de desconectá-la.",
             )
         await session.delete(connection)
 
@@ -268,7 +303,10 @@ async def _upsert_connection(
     async with AsyncSessionLocal() as session, session.begin():
         user = await session.get(UserRecord, user_id)
         if user is None or str(user.ark_organization_id) != organization_id:
-            raise HTTPException(status_code=401, detail="A conta Ark da autorização não existe mais.")
+            raise HTTPException(
+                status_code=401,
+                detail="A conta Ark da autorização não existe mais.",
+            )
         connection = await session.scalar(
             select(IntegrationConnectionRecord).where(
                 IntegrationConnectionRecord.user_id == user_id,

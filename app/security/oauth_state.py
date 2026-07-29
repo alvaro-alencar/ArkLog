@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -23,7 +23,7 @@ def create_oauth_state(
     secret = settings.oauth_state_secret.strip()
     if len(secret) < 32:
         raise OAuthStateError("OAUTH_STATE_SECRET must contain at least 32 characters.")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "provider": provider,
         "user_id": user_id,

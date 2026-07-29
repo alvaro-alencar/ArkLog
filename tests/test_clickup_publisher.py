@@ -26,7 +26,11 @@ def _make_publisher() -> ClickUpPublisher:
 @pytest.mark.asyncio
 async def test_publisher_calls_clickup_api():
     publisher = _make_publisher()
-    with patch.object(ClickUpPublisher, "_mark_published", new_callable=AsyncMock):
+    with (
+        patch.object(ClickUpPublisher, "_mark_published", new_callable=AsyncMock),
+        patch("app.integrations.clickup.publisher.settings") as mock_settings,
+    ):
+        mock_settings.clickup_api_token = "configured-only-in-backend"
         await publisher.handle_report_generated(SAMPLE_PAYLOAD)
     publisher._client.post_task_comment.assert_awaited_once()
     call_args = publisher._client.post_task_comment.call_args

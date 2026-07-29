@@ -70,7 +70,10 @@ async def publish_destination(
     connection: IntegrationConnectionRecord,
     config: dict[str, Any],
     content: str,
+    *,
+    idempotency_key: str,
 ) -> dict[str, Any]:
+    """Publish with a stable provider-side message ID when the destination supports it."""
     if connection.provider != "slack":
         raise IntegrationRuntimeError(
             f"Provider {connection.provider} is not available as a destination yet."
@@ -93,6 +96,7 @@ async def publish_destination(
             json={
                 "channel": channel_id,
                 "text": content[:39000],
+                "client_msg_id": idempotency_key[:36],
                 "unfurl_links": False,
                 "unfurl_media": False,
             },
@@ -138,7 +142,9 @@ def _normalize_github_activity(
                 "description": item.get("body", ""),
                 "actor": item.get("author", ""),
                 "status": item.get("state", ""),
-                "occurred_at": item.get("merged_at") or item.get("closed_at") or item.get("created_at", ""),
+                "occurred_at": item.get("merged_at")
+                or item.get("closed_at")
+                or item.get("created_at", ""),
                 "reference": f"PR #{item.get('number')}",
                 "labels": item.get("labels", []),
             }

@@ -6,13 +6,11 @@
     { "src": "dashboard/package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
   ],
   "routes": [
+    { "src": "/api/arklog/v1/(.*)", "dest": "/api/index.py" },
     { "src": "/api/v1/(.*)", "dest": "/api/index.py" },
     { "src": "/arklog/assets/(.*)", "dest": "/assets/$1" },
     { "src": "/arklog/(.*\\.(?:png|jpg|jpeg|svg|ico|webp))", "dest": "/$1" },
     { "src": "/arklog(?:/.*)?", "dest": "/index.html" },
     { "src": "/", "status": 302, "headers": { "Location": "/arklog" } }
-  ],
-  "functions": {
-    "api/index.py": { "maxDuration": 60 }
-  }
+  ]
 }

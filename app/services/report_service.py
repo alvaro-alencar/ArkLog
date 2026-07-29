@@ -49,8 +49,12 @@ class ReportService:
             return
         project_record, access = row
 
-        if trigger != "instant" and not access.is_admin:
-            log.warning("automated_report_blocked_for_non_admin", status=access.status)
+        if trigger != "instant" and not (access.is_admin and access.status == "ACTIVE"):
+            log.warning(
+                "automated_report_blocked_for_untrusted_access",
+                status=access.status,
+                is_admin=access.is_admin,
+            )
             return
         if trigger == "instant" and not usage_id:
             log.warning("instant_report_without_usage_reservation")

@@ -1,176 +1,74 @@
 import React, { useEffect, useState } from 'react';
-import { ExternalLink, GitBranch, Calendar, Plus, Zap } from 'lucide-react';
+import { Calendar, ExternalLink, GitBranch, Plus, ShieldCheck, Zap } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 
-interface Project {
-  id: number;
-  name: string;
-  repo_full_name: string;
-  description: string;
-  created_at: string;
-}
-
-const WINDOW_OPTIONS = [
-  { value: 1, label: 'Last 1 hour' },
-  { value: 6, label: 'Last 6 hours' },
-  { value: 12, label: 'Last 12 hours' },
-  { value: 24, label: 'Last 24 hours' },
-  { value: 48, label: 'Last 48 hours' },
-  { value: 168, label: 'Last 7 days' },
-  { value: 720, label: 'Last 30 days' },
-  { value: -1, label: 'All commits' },
+interface Project { id: number; name: string; repo_full_name: string; description: string; created_at: string; }
+const FULL_WINDOWS = [
+  { value: 1, label: 'Última hora' }, { value: 6, label: 'Últimas 6 horas' },
+  { value: 24, label: 'Últimas 24 horas' }, { value: 168, label: 'Últimos 7 dias' },
+  { value: 720, label: 'Últimos 30 dias' }, { value: -1, label: 'Todo o histórico' },
 ];
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { access, refreshAccess } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [instantProjectId, setInstantProjectId] = useState<number | null>(null);
-  const [instantWindowHours, setInstantWindowHours] = useState<number>(24);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [instantResult, setInstantResult] = useState<{ projectId: number; commits: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [openProject, setOpenProject] = useState<number | null>(null);
+  const [windowHours, setWindowHours] = useState(24);
+  const [generating, setGenerating] = useState<number | null>(null);
+  const [message, setMessage] = useState<{ projectId: number; text: string; error?: boolean } | null>(null);
+
+  const windows = access?.status === 'TRIAL' ? FULL_WINDOWS.filter((item) => item.value > 0 && item.value <= 168) : FULL_WINDOWS;
 
   useEffect(() => {
-    api.get('/projects')
-      .then(response => {
-        setProjects(response.data.projects);
-      })
-      .catch(error => console.error('Error fetching projects', error))
-      .finally(() => setIsLoading(false));
+    api.get('/projects').then((response) => setProjects(response.data.projects)).finally(() => setLoading(false));
   }, []);
 
-  const triggerInstantReport = async (projectId: number) => {
-    setIsGenerating(true);
-    setInstantResult(null);
+  const generate = async (projectId: number) => {
+    setGenerating(projectId);
+    setMessage(null);
     try {
-      const res = await api.post(`/projects/${projectId}/instant-report`, { window_hours: instantWindowHours });
-      setInstantResult({ projectId, commits: res.data.commit_count });
-      setInstantProjectId(null);
-    } catch (err) {
-      console.error(err);
-      alert('Failed to trigger report. Check console for details.');
+      const response = await api.post(`/projects/${projectId}/instant-report`, { window_hours: windowHours }, {
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+      });
+      await refreshAccess();
+      setMessage({ projectId, text: response.data.report_id ? 'Relatório concluído e salvo.' : 'Relatório processado.' });
+      setOpenProject(null);
+    } catch (caught: any) {
+      await refreshAccess().catch(() => null);
+      setMessage({ projectId, error: true, text: String(caught?.response?.data?.detail || 'Não foi possível gerar o relatório.') });
     } finally {
-      setIsGenerating(false);
+      setGenerating(null);
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-end">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Your Projects</h2>
-          <p className="text-gray-400 mt-1">Manage and monitor your tracked repositories.</p>
-        </div>
-        <Link
-          to="/new"
-          className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-md font-medium hover:bg-gray-200 transition-colors"
-        >
-          <Plus size={18} />
-          New Project
-        </Link>
+    <div className="space-y-7">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div><h1 className="text-3xl font-bold">Projetos</h1><p className="text-slate-500 mt-1">Relatórios gerados com cota e identidade verificadas no servidor.</p></div>
+        <Link to="/new" className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 text-white px-4 py-3 font-semibold"><Plus size={18} /> Novo projeto</Link>
       </div>
 
-      {projects.length === 0 ? (
-        <div className="glass-card p-12 text-center space-y-4">
-          <p className="text-gray-400">No projects found. Create your first flow to get started.</p>
-        </div>
+      <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+        <ShieldCheck className="text-violet-700 shrink-0" />
+        <div className="flex-1"><p className="font-semibold text-violet-950">Acesso {access?.status === 'TRIAL' ? 'de teste' : 'autorizado'}</p><p className="text-sm text-violet-800">Relatórios restantes: {access?.remainingReports === null ? 'sem limite para administração' : access?.remainingReports}</p></div>
+      </div>
+
+      {loading ? <div className="py-20 text-center text-slate-500">Carregando...</div> : projects.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center"><p className="text-slate-500">Nenhum projeto cadastrado.</p><Link to="/new" className="inline-block mt-5 font-semibold text-violet-700">Adicionar o primeiro</Link></div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {projects.map(project => (
-            <div key={project.id} className="glass-card p-6 space-y-4 group">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <h3 className="text-xl font-semibold group-hover:text-gray-300 transition-colors">
-                    {project.name}
-                  </h3>
-                  <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <GitBranch size={14} />
-                    {project.repo_full_name}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setInstantResult(null);
-                      setInstantProjectId(instantProjectId === project.id ? null : project.id);
-                    }}
-                    title="Run instant report"
-                    className={`transition-colors ${instantProjectId === project.id ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`}
-                  >
-                    <Zap size={16} />
-                  </button>
-                  <a
-                    href={`https://github.com/${project.repo_full_name}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-gray-500 hover:text-white transition-colors"
-                  >
-                    <ExternalLink size={18} />
-                  </a>
-                </div>
-              </div>
-
-              <p className="text-sm text-gray-400 line-clamp-2 min-h-[2.5rem]">
-                {project.description || 'No description provided.'}
-              </p>
-
-              {/* Instant report panel */}
-              {instantProjectId === project.id && (
-                <div className="border border-yellow-500/20 bg-yellow-500/5 rounded-lg p-3 space-y-2">
-                  <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest">Instant Report</p>
-                  <div className="flex gap-2">
-                    <select
-                      className="flex-1 bg-black/60 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-yellow-500/50"
-                      value={instantWindowHours}
-                      onChange={(e) => setInstantWindowHours(Number(e.target.value))}
-                    >
-                      {WINDOW_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => triggerInstantReport(project.id)}
-                      disabled={isGenerating}
-                      className="px-3 py-1.5 bg-yellow-500/20 border border-yellow-500/30 text-yellow-400 rounded-lg text-xs font-bold hover:bg-yellow-500/30 transition-all flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      {isGenerating
-                        ? <div className="w-3 h-3 border border-yellow-400/50 border-t-yellow-400 rounded-full animate-spin" />
-                        : <Zap size={12} />}
-                      Run
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Success feedback */}
-              {instantResult?.projectId === project.id && (
-                <div className="border border-green-500/20 bg-green-500/5 rounded-lg px-3 py-2 text-[10px] text-green-400 font-bold">
-                  Report queued — {instantResult.commits} commit{instantResult.commits !== 1 ? 's' : ''} being processed.
-                </div>
-              )}
-
-              <div className="flex items-center justify-between pt-4 border-t border-border">
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  <Calendar size={12} />
-                  Added {new Date(project.created_at).toLocaleDateString()}
-                </div>
-                <button
-                  onClick={() => navigate(`/reports?project=${project.id}`)}
-                  className="text-xs font-medium px-3 py-1 bg-white text-black rounded hover:bg-gray-200 transition-colors"
-                >
-                  View Reports
-                </button>
-              </div>
-            </div>
+        <div className="grid md:grid-cols-2 gap-5">
+          {projects.map((project) => (
+            <article key={project.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex justify-between gap-4"><div><h2 className="text-xl font-bold">{project.name}</h2><p className="text-sm text-slate-500 flex items-center gap-2 mt-1"><GitBranch size={14} />{project.repo_full_name}</p></div><a href={`https://github.com/${project.repo_full_name}`} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-900"><ExternalLink size={19} /></a></div>
+              <p className="text-sm text-slate-600 mt-5 min-h-10">{project.description || 'Sem contexto adicional.'}</p>
+              {openProject === project.id && <div className="mt-5 p-4 rounded-2xl bg-slate-50 border border-slate-200"><label className="text-xs font-bold uppercase tracking-wide text-slate-500">Período<select value={windowHours} onChange={(event) => setWindowHours(Number(event.target.value))} className="mt-2 block w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-sm text-slate-950">{windows.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><button disabled={generating === project.id || access?.remainingReports === 0} onClick={() => generate(project.id)} className="mt-3 w-full rounded-xl bg-violet-700 text-white py-2.5 font-bold disabled:opacity-50 flex items-center justify-center gap-2"><Zap size={16} />{generating === project.id ? 'Gerando...' : 'Gerar relatório'}</button></div>}
+              {message?.projectId === project.id && <div className={`mt-4 rounded-xl p-3 text-sm ${message.error ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>{message.text}</div>}
+              <div className="mt-6 pt-4 border-t border-slate-200 flex items-center justify-between"><span className="text-xs text-slate-400 flex items-center gap-2"><Calendar size={13} />{new Date(project.created_at).toLocaleDateString('pt-BR')}</span><div className="flex gap-2"><button onClick={() => setOpenProject(openProject === project.id ? null : project.id)} className="rounded-lg bg-amber-100 text-amber-800 p-2" title="Gerar relatório"><Zap size={16} /></button><button onClick={() => navigate(`/reports?project=${project.id}`)} className="rounded-lg bg-slate-950 text-white px-3 py-2 text-xs font-bold">Relatórios</button></div></div>
+            </article>
           ))}
         </div>
       )}

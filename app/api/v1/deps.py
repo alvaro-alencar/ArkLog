@@ -1,47 +1,57 @@
-"""
-ArkLog - API Dependencies
+"""FastAPI authentication and authorization dependencies."""
 
-Provides security and database session dependencies for FastAPI routes.
-Includes JWT verification and user retrieval.
-"""
-
-import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import settings
-from app.models.database import get_session
-from app.models.tables import UserRecord
+from app.models.tables import ArkLogAccessRecord, UserRecord
+from app.security.ark_auth import ArkIdentity, resolve_identity
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login/github")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    session: AsyncSession = Depends(get_session),
-) -> UserRecord:
-    """Validate JWT and return the user record from the database."""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+async def get_identity(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> ArkIdentity:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Entre na sua conta Ark para continuar.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
+    return await resolve_identity(credentials.credentials)
 
-    result = await session.execute(
-        select(UserRecord).where(UserRecord.id == int(user_id))
-    )
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise credentials_exception
-    return user
+
+async def get_authenticated_user(identity: ArkIdentity = Depends(get_identity)) -> UserRecord:
+    return identity.user
+
+
+async def get_current_user(identity: ArkIdentity = Depends(get_identity)) -> UserRecord:
+    if identity.access.status not in {"TRIAL", "ACTIVE"}:
+        detail = (
+            "Acesso ao ArkLog ainda não foi liberado."
+            if identity.access.status == "PENDING"
+            else "Acesso ao ArkLog bloqueado."
+        )
+        raise HTTPException(status_code=403, detail=detail)
+    return identity.user
+
+
+async def get_current_access(identity: ArkIdentity = Depends(get_identity)) -> ArkLogAccessRecord:
+    if identity.access.status not in {"TRIAL", "ACTIVE"}:
+        raise HTTPException(status_code=403, detail="Acesso ao ArkLog não autorizado.")
+    return identity.access
+
+
+async def require_active_access(identity: ArkIdentity = Depends(get_identity)) -> ArkIdentity:
+    if identity.access.status != "ACTIVE":
+        raise HTTPException(
+            status_code=403,
+            detail="Este recurso exige acesso completo ao ArkLog.",
+        )
+    return identity
+
+
+async def require_admin(identity: ArkIdentity = Depends(get_identity)) -> ArkIdentity:
+    if not identity.access.is_admin:
+        raise HTTPException(status_code=403, detail="Área exclusiva da administração ArkLog.")
+    return identity

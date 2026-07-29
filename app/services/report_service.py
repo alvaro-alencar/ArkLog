@@ -1,11 +1,4 @@
-"""
-ArkLog - Report Service
-
-Subscriber of "commit.batch_ready". Orchestrates report generation:
-  commit.batch_ready → generate AI report → persist → publish report.generated
-
-Registered in app/core/events.py during on_startup().
-"""
+"""Report generation orchestration and quota ledger completion."""
 
 from typing import Any
 
@@ -14,44 +7,68 @@ from sqlalchemy import select
 
 from app.ai.report_generator import ReportGenerator
 from app.core.events import event_bus
-from app.domain.entities.report import ReportStatus, ReportTrigger
+from app.domain.entities.report import ReportStatus
 from app.models.database import AsyncSessionLocal
-from app.models.tables import ProjectRecord, ReportRecord
+from app.models.tables import ArkLogAccessRecord, ProjectRecord, ReportRecord
+from app.security.access import complete_usage, fail_usage
 
 logger = structlog.get_logger(__name__)
 
 
 class ReportService:
-    """Handles commit.batch_ready events and produces AI-generated reports."""
-
     def __init__(self) -> None:
         self._generator = ReportGenerator()
 
     async def handle_commit_batch(self, payload: dict[str, Any]) -> None:
         project_name = payload.get("project_name", "unknown")
         trigger = payload.get("trigger", "webhook")
-        log = logger.bind(project=project_name)
+        usage_id = payload.get("usage_id")
+        log = logger.bind(project=project_name, trigger=trigger, usage_id=usage_id)
 
-        log.info("report_service_triggered", commits=payload.get("commit_count", 0), trigger=trigger)
+        project_id = payload.get("project_id")
+        user_id = payload.get("user_id")
+        statement = select(ProjectRecord, ArkLogAccessRecord).join(
+            ArkLogAccessRecord,
+            ArkLogAccessRecord.user_id == ProjectRecord.user_id,
+        )
+        if project_id is not None:
+            statement = statement.where(ProjectRecord.id == int(project_id))
+            if user_id is not None:
+                statement = statement.where(ProjectRecord.user_id == int(user_id))
+        else:
+            statement = statement.where(
+                ProjectRecord.name == project_name,
+                ArkLogAccessRecord.is_admin.is_(True),
+            )
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(statement.limit(1))
+            row = result.first()
+        if row is None:
+            await fail_usage(usage_id, "Project not found")
+            return
+        project_record, access = row
+
+        if trigger != "instant" and not (access.is_admin and access.status == "ACTIVE"):
+            log.warning(
+                "automated_report_blocked_for_untrusted_access",
+                status=access.status,
+                is_admin=access.is_admin,
+            )
+            return
+        if trigger == "instant" and not usage_id:
+            log.warning("instant_report_without_usage_reservation")
+            return
 
         try:
             content, summary = await self._generator.generate(payload)
         except Exception as exc:
             log.error("report_generation_failed", error=str(exc))
+            await fail_usage(usage_id, str(exc))
             return
 
         async with AsyncSessionLocal() as session:
             async with session.begin():
-                result = await session.execute(
-                    select(ProjectRecord)
-                    .where(ProjectRecord.name == project_name)
-                    .limit(1)
-                )
-                project_record = result.scalar_one_or_none()
-                if project_record is None:
-                    log.warning("project_not_found_in_db", project=project_name)
-                    return
-
                 record = ReportRecord(
                     trigger=trigger,
                     status=ReportStatus.GENERATED.value,
@@ -64,18 +81,21 @@ class ReportService:
                 await session.flush()
                 report_id = record.id
 
-        preview = summary[:80] + "..." if len(summary) > 80 else summary
-        log.info("report_persisted", preview=preview, report_id=report_id)
+        if usage_id:
+            await complete_usage(usage_id, report_id)
 
-        await event_bus.publish(
-            "report.generated",
-            {
-                "report_id": report_id,
-                "project_name": project_name,
-                "clickup_task_id": payload.get("clickup_task_id", ""),
-                "content": content,
-                "summary": summary,
-                "commit_count": payload.get("commit_count", 0),
-                "trigger": trigger,
-            },
-        )
+        log.info("report_persisted", report_id=report_id)
+        clickup_task_id = payload.get("clickup_task_id", "")
+        if clickup_task_id:
+            await event_bus.publish(
+                "report.generated",
+                {
+                    "report_id": report_id,
+                    "project_name": project_name,
+                    "clickup_task_id": clickup_task_id,
+                    "content": content,
+                    "summary": summary,
+                    "commit_count": payload.get("commit_count", 0),
+                    "trigger": trigger,
+                },
+            )

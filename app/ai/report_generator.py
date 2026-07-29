@@ -1,15 +1,4 @@
-"""
-ArkLog - AI Report Generator
-
-Calls the configured AI model (OpenAI / OpenRouter) with the assembled
-prompt context and returns the generated report content.
-
-Triggers e comportamento:
-  webhook          → relatório conciso dos commits do push
-  daily_scheduled  → relatório diário; infere fase se sem commits
-  weekly_scheduled → relatório semanal detalhado da semana
-  backfill         → análise histórica abrangente de todo o projeto
-"""
+"""AI report generation with server-side cost controls."""
 
 from typing import Any
 
@@ -23,49 +12,21 @@ logger = structlog.get_logger(__name__)
 
 _PROMPT_BASE = """Você é um gerente técnico sênior gerando relatórios de progresso de projetos de software.
 
-Você receberá dados completos de atividade do GitHub: commits, pull requests, issues, \
-execuções de CI/CD e releases. Use TODOS os dados disponíveis — não apenas commits.
+Você receberá dados de atividade do GitHub: commits, pull requests, issues, execuções de CI/CD e releases.
+Use apenas os dados fornecidos.
 
 Regras obrigatórias:
-- Escreva SEMPRE em português do Brasil (pt-BR)
-- Use formatação Markdown: ## para títulos, ### para subtítulos, **negrito** para destaques, *itálico* para ênfase
-- Descreva apenas o que está explicitamente presente nos dados fornecidos
-- Nunca invente arquivos, funcionalidades ou detalhes técnicos não mencionados
-- Evite frases genéricas ("progresso sendo feito", "melhorias diversas", "avanços significativos")
-- Cada frase deve carregar um fato específico e verificável
-- PRs mergeados, issues fechadas e releases publicadas são sinais tão importantes quanto commits
+- Escreva sempre em português do Brasil
+- Use Markdown com títulos e destaques moderados
+- Nunca invente arquivos, funcionalidades ou decisões
+- Cada afirmação deve ser verificável nos dados
+- Separe o que foi concluído, o que está em andamento e possíveis pendências
+"""
 
-Quando não há atividade no período:
-- Se o contexto ou descrição do projeto oferecem evidências claras do estado atual, \
-descreva esse estado com confiança — é uma inferência justa e útil
-- Se não há evidências suficientes, informe objetivamente: \
-"O projeto encontra-se em fase de planejamento e definição de novas tarefas neste período\""""
-
-SYSTEM_PROMPT = _PROMPT_BASE + """
-
-- Seja CONCISO — corte toda frase que não adiciona informação nova. Máximo 150 palavras."""
-
-WEEKLY_SYSTEM_PROMPT = _PROMPT_BASE + """
-
-- Seja DETALHADO — este é o relatório semanal que será revisado antes de ir ao contratante
-- Organize por área ou tema quando houver múltiplos commits em domínios diferentes
-- Destaque o que foi concluído, o que está em andamento e o que pode estar pendente
-- Máximo 400 palavras"""
-
-BACKFILL_SYSTEM_PROMPT = """Você é um arquiteto de software sênior gerando um relatório histórico completo de um projeto.
-
-Este é o PRIMEIRO relatório do projeto no ArkLog, cobrindo TODA a história de desenvolvimento até hoje.
-
-Regras obrigatórias:
-- Escreva SEMPRE em português do Brasil (pt-BR)
-- Use formatação Markdown rica: ## títulos, ### subtítulos, **negrito**, *itálico*, listas com -
-- Seja DETALHADO e ABRANGENTE — capture toda a evolução do projeto
-- Organize cronologicamente ou por fases/épocas quando identificável
-- Identifique padrões: áreas com mais atenção, funcionalidades construídas, evolução da arquitetura
-- Destaque decisões técnicas relevantes visíveis nos commits
-- Descreva o estado atual com base nos commits mais recentes
-- Nunca invente detalhes não presentes nos commits
-- Cada afirmação rastreável a commits reais"""
+SYSTEM_PROMPT = _PROMPT_BASE + "\n- Seja conciso. Máximo 150 palavras."
+WEEKLY_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Seja detalhado. Máximo 400 palavras."
+BACKFILL_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Organize a evolução histórica. Máximo 800 palavras."
+TRIAL_SYSTEM_PROMPT = _PROMPT_BASE + "\n- Este é um relatório demonstrativo. Máximo 180 palavras."
 
 _PROMPTS = {
     "backfill": (BACKFILL_SYSTEM_PROMPT, "ai_max_tokens_backfill"),
@@ -74,36 +35,45 @@ _PROMPTS = {
 
 
 class ReportGenerator:
-    """Generates AI-powered progress reports from commit context."""
-
     def __init__(self) -> None:
         self._context_builder = ContextBuilder()
 
     async def generate(self, payload: dict[str, Any]) -> tuple[str, str]:
-        """
-        Generate a report from a commit batch payload.
-        Returns (full_content, summary) where summary is the first paragraph.
-        """
         project_name = payload.get("project_name", "unknown")
-        style = payload.get("report_style", "misto")
         trigger = payload.get("trigger", "webhook")
+        access_status = payload.get("access_status", "ACTIVE")
+        is_trial = access_status == "TRIAL"
 
-        system_prompt, tokens_attr = _PROMPTS.get(trigger, (SYSTEM_PROMPT, "ai_max_tokens"))
-        max_tokens = getattr(settings, tokens_attr)
+        if is_trial:
+            system_prompt = TRIAL_SYSTEM_PROMPT
+            max_tokens = settings.ai_trial_max_tokens
+            model = settings.ai_trial_model
+            prompt_limit = settings.ai_trial_max_prompt_chars
+        else:
+            system_prompt, tokens_attr = _PROMPTS.get(
+                trigger, (SYSTEM_PROMPT, "ai_max_tokens")
+            )
+            max_tokens = getattr(settings, tokens_attr)
+            model = settings.ai_model
+            prompt_limit = settings.ai_max_prompt_chars
 
         prompt = self._context_builder.build_context(payload)
+        if len(prompt) > prompt_limit:
+            prompt = prompt[:prompt_limit] + "\n\n[Contexto truncado pelo limite de segurança do ArkLog.]"
 
         logger.info(
             "report_generation_start",
             project=project_name,
-            style=style,
             trigger=trigger,
+            access_status=access_status,
+            model=model,
             max_tokens=max_tokens,
+            prompt_chars=len(prompt),
         )
 
         client = get_openai_client()
         response = await client.chat.completions.create(
-            model=settings.ai_model,
+            model=model,
             max_tokens=max_tokens,
             temperature=settings.ai_temperature,
             messages=[
@@ -111,10 +81,8 @@ class ReportGenerator:
                 {"role": "user", "content": prompt},
             ],
         )
-
         content = response.choices[0].message.content or ""
         summary = content.split("\n\n")[0] if content else ""
-
         logger.info(
             "report_generation_complete",
             project=project_name,
@@ -122,5 +90,4 @@ class ReportGenerator:
             tokens=response.usage.total_tokens if response.usage else 0,
             chars=len(content),
         )
-
         return content, summary

@@ -1,7 +1,5 @@
 """Tests for the GitHub commit parser."""
 
-import pytest
-
 from app.integrations.github.commit_parser import CommitParser
 
 

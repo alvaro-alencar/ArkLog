@@ -1,6 +1,12 @@
-"""Tests for the timeline and project listing endpoints."""
+"""Tests for authenticated timeline and project listing endpoints."""
 
 import pytest
+
+
+@pytest.mark.asyncio
+async def test_protected_routes_require_ark_login(unauthenticated_client):
+    response = await unauthenticated_client.get("/api/v1/projects")
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

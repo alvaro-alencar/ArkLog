@@ -1,8 +1,7 @@
 """
-ArkLog - Application Configuration
+ArkLog - Application Configuration.
 
-Centralized settings using Pydantic Settings. All values can be overridden
-via environment variables or the .env file. Import `settings` everywhere.
+All secrets remain server-side. The web client never receives the OpenRouter key.
 """
 
 from pydantic import Field
@@ -17,68 +16,72 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Application ──────────────────────────────────────────────
+    # Application
     app_name: str = "ArkLog"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     app_env: str = Field(default="development")
     debug: bool = Field(default=False)
 
-    # ── API Server ───────────────────────────────────────────────
+    # API server
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
     api_prefix: str = "/api/v1"
+    cors_origins: list[str] = Field(default=["http://localhost:5173"])
 
-    # ── CORS ─────────────────────────────────────────────────────
-    cors_origins: list[str] = Field(default=["*"])
+    # Shared Ark account identity provider
+    ark_auth_me_url: str = Field(
+        default="https://www.arksystem.net/api/saas?action=me"
+    )
+    ark_auth_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+    arklog_admin_emails: str = Field(default="")
+    arklog_auto_trial: bool = Field(default=False)
+    arklog_trial_report_limit: int = Field(default=1, ge=0, le=1)
+    arklog_active_report_limit: int = Field(default=50, ge=-1)
+    arklog_trial_max_window_hours: int = Field(default=168, ge=1, le=168)
+    arklog_trial_max_projects: int = Field(default=1, ge=1, le=1)
 
-    # ── Security ─────────────────────────────────────────────────
+    # GitHub
     github_webhook_secret: str = Field(default="")
-    github_token: str = Field(default="")  # Personal Access Token for GitHub API (legacy/backfill)
-    
-    # GitHub OAuth
+    github_token: str = Field(default="")
     github_client_id: str = Field(default="")
     github_client_secret: str = Field(default="")
     github_redirect_uri: str = Field(default="http://localhost:5173/auth/callback")
-    
-    # JWT
+
+    # Legacy JWT settings kept only for backward-compatible configuration parsing.
+    # ArkLog no longer accepts these tokens for application access.
     jwt_secret: str = Field(default="change-me-in-production")
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24 * 7  # 1 week
+    jwt_expire_minutes: int = 60 * 24 * 7
 
-    # ── Database ─────────────────────────────────────────────────
+    # Database
     database_url: str = Field(default="sqlite+aiosqlite:///./data/arklog.db")
 
-    # ── AI Provider ──────────────────────────────────────────────
-    # Compatible with any OpenAI-format API (OpenRouter, OpenAI, etc.)
-    # Env vars: AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MAX_TOKENS, AI_TEMPERATURE
+    # AI provider
     ai_api_key: str = Field(default="")
     ai_base_url: str = Field(default="https://openrouter.ai/api/v1")
     ai_model: str = Field(default="google/gemini-2.5-flash")
-    ai_max_tokens: int = Field(default=2000)
-    ai_max_tokens_backfill: int = Field(default=8000)
-    ai_temperature: float = Field(default=0.3)
+    ai_trial_model: str = Field(default="google/gemini-2.5-flash")
+    ai_max_tokens: int = Field(default=2000, ge=1, le=16000)
+    ai_max_tokens_backfill: int = Field(default=8000, ge=1, le=32000)
+    ai_trial_max_tokens: int = Field(default=1200, ge=1, le=1200)
+    ai_temperature: float = Field(default=0.3, ge=0, le=1)
+    ai_max_prompt_chars: int = Field(default=120_000, ge=1, le=500_000)
+    ai_trial_max_prompt_chars: int = Field(default=30_000, ge=1, le=30_000)
 
-    # ── ClickUp ──────────────────────────────────────────────────
+    # ClickUp
     clickup_api_token: str = Field(default="")
     clickup_team_id: str = Field(default="")
     clickup_base_url: str = "https://api.clickup.com/api/v2"
 
-    # ── Projects ─────────────────────────────────────────────────
     projects_config_path: str = Field(default="projects.yaml")
 
-    # ── Scheduler ────────────────────────────────────────────────
-    # Set SCHEDULER_ENABLED=false on replica containers to prevent duplicate reports
-    scheduler_enabled: bool = Field(default=True)
-    # Timezone used for interpreting cron schedule times entered by the user.
-    # Users enter times in local time, so this must match their timezone.
+    # Scheduler. Keep disabled on serverless replicas.
+    scheduler_enabled: bool = Field(default=False)
     scheduler_timezone: str = Field(default="America/Sao_Paulo")
 
-    # ── Webhook ──────────────────────────────────────────────────
-    max_commits_per_webhook: int = Field(default=50)
-
-    # ── Logging ──────────────────────────────────────────────────
+    max_commits_per_webhook: int = Field(default=50, ge=1, le=100)
     log_level: str = Field(default="INFO")
-    log_format: str = Field(default="json")  # json | text
+    log_format: str = Field(default="json")
 
     @property
     def is_production(self) -> bool:
@@ -87,6 +90,14 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        return {
+            item.strip().lower()
+            for item in self.arklog_admin_emails.split(",")
+            if item.strip()
+        }
 
 
 settings = Settings()

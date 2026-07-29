@@ -1,0 +1,15 @@
+fastapi>=0.115.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+sqlalchemy>=2.0.36
+aiosqlite>=0.20.0
+asyncpg>=0.30.0
+openai>=1.57.0
+httpx>=0.28.0
+pyyaml>=6.0.2
+structlog>=24.4.0
+python-dotenv>=1.0.1
+python-multipart>=0.0.19
+pyjwt[crypto]>=2.10.0
+apscheduler[sqlalchemy]>=3.10.4
+gitpython>=3.1.43

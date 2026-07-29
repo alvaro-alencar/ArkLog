@@ -60,7 +60,7 @@ def test_misto_combines_sections(sample_payload):
 def test_empty_commits_handled_gracefully(sample_payload):
     sample_payload["commits"] = []
     ctx = ContextBuilder().build_context(sample_payload)
-    assert "No commits" in ctx
+    assert "Nenhum commit no período" in ctx
 
 
 def _make_mock_response(text: str) -> MagicMock:

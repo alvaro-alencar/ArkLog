@@ -1,9 +1,4 @@
-"""
-ArkLog - Database Engine & Session Factory
-
-Configures SQLAlchemy async engine. SQLite is used initially (zero ops overhead).
-Migrating to PostgreSQL requires only changing DATABASE_URL — SQLAlchemy handles the rest.
-"""
+"""ArkLog database engine and session factory."""
 
 from typing import AsyncGenerator
 
@@ -15,9 +10,7 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
-    connect_args=(
-        {"check_same_thread": False} if "sqlite" in settings.database_url else {}
-    ),
+    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -28,30 +21,43 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 class Base(DeclarativeBase):
-    """Base class for all ORM models."""
-
     pass
 
 
 async def init_db() -> None:
-    """Create all tables. Called once on startup."""
-    from app.models import tables  # noqa: F401 — registers models with Base.metadata
+    from app.models import tables  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Add preference columns to users table if they don't exist yet
         if "sqlite" in str(engine.url):
-            for col, definition in [
+            user_columns = [
                 ("timezone", "VARCHAR(100) DEFAULT 'America/Sao_Paulo'"),
                 ("language", "VARCHAR(10) DEFAULT 'pt-BR'"),
-            ]:
+                ("ark_user_id", "VARCHAR(64)"),
+                ("ark_organization_id", "VARCHAR(64)"),
+                ("is_platform_admin", "BOOLEAN NOT NULL DEFAULT 0"),
+            ]
+            for column, definition in user_columns:
                 try:
-                    await conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                    await conn.exec_driver_sql(
+                        f"ALTER TABLE users ADD COLUMN {column} {definition}"
+                    )
                 except Exception:
-                    pass  # column already exists
+                    pass
+            try:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE arklog_access ADD COLUMN trial_granted_at DATETIME"
+                )
+            except Exception:
+                pass
+            try:
+                await conn.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS users_ark_user_id_idx ON users(ark_user_id)"
+                )
+            except Exception:
+                pass
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields a database session."""
     async with AsyncSessionLocal() as session:
         yield session

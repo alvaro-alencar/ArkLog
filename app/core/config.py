@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     slack_api_base_url: str = "https://slack.com/api"
 
+    # Inert legacy fields retained only so old modules/tests can import safely.
+    # They are not documented, wired at startup, or used by the new flow engine.
+    clickup_api_token: str = Field(default="")
+    clickup_team_id: str = Field(default="")
+    clickup_base_url: str = "https://api.clickup.com/api/v2"
+
     projects_config_path: str = Field(default="projects.yaml")
 
     # Scheduling will be reintroduced through a single external scheduler/queue.

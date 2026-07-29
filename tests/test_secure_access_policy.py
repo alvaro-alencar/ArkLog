@@ -1,7 +1,5 @@
 """Regression tests for ArkLog cost and credential isolation."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.core.config import settings
@@ -28,7 +26,9 @@ def test_public_access_never_hides_the_real_server_quota() -> None:
     assert public_access(access)["remainingReports"] == 0
 
 
-def test_non_admin_github_reads_never_fall_back_to_owner_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_admin_github_reads_never_fall_back_to_owner_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "github_token", "owner-secret")
     assert "Authorization" not in _headers(token=None, use_global_token=False)
     assert _headers(token=None, use_global_token=True)["Authorization"] == "Bearer owner-secret"

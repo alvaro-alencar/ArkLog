@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Github, MessageSquare, Plug, RefreshCw, Trash2 } from 'lucide-react';
+import { GitBranch, MessageSquare, Plug, RefreshCw, Trash2 } from 'lucide-react';
 import api from '../lib/api';
 
 type Connection = {
@@ -69,7 +69,7 @@ const Connections: React.FC = () => {
   const cards = [
     {
       provider: 'github' as const,
-      icon: <Github size={24} />,
+      icon: <GitBranch size={24} />,
       title: 'GitHub',
       text: 'Fonte inicial para commits, pull requests, issues, CI e releases. A autorização pertence à sua conta.',
     },
@@ -140,7 +140,7 @@ const Connections: React.FC = () => {
           {connections.map((connection) => (
             <div key={connection.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 sm:flex-row sm:items-center">
               <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100">
-                {connection.provider === 'github' ? <Github size={20} /> : <MessageSquare size={20} />}
+                {connection.provider === 'github' ? <GitBranch size={20} /> : <MessageSquare size={20} />}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="font-bold">{connection.label}</p>

@@ -36,12 +36,10 @@ def test_public_access_never_hides_the_real_server_quota() -> None:
     assert public_access(access)["remainingReports"] == 0
 
 
-def test_non_admin_github_reads_never_fall_back_to_owner_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "github_token", "owner-secret")
+def test_github_reads_never_fall_back_to_an_owner_token() -> None:
     assert "Authorization" not in _headers(token=None, use_global_token=False)
-    assert _headers(token=None, use_global_token=True)["Authorization"] == "Bearer owner-secret"
+    assert "Authorization" not in _headers(token=None, use_global_token=True)
+    assert _headers(token="user-oauth-token")["Authorization"] == "Bearer user-oauth-token"
 
 
 @pytest.mark.asyncio
@@ -87,7 +85,11 @@ async def test_failed_generation_returns_the_trial_slot_exactly_once() -> None:
             reports_used=0,
         ),
     )
-    usage, is_new = await reserve_report(identity, project_id, f"request-{unique}")
+    usage, is_new = await reserve_report(
+        identity,
+        f"request-{unique}",
+        project_id=project_id,
+    )
     assert is_new is True
 
     async with AsyncSessionLocal() as session:

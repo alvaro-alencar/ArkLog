@@ -110,13 +110,15 @@ async def resolve_identity(token: str) -> ArkIdentity:
                         approved_at=naive_utcnow(),
                     )
                 elif settings.arklog_auto_trial:
+                    now = naive_utcnow()
                     access = ArkLogAccessRecord(
                         user_id=user.id,
                         status="TRIAL",
-                        report_limit=settings.arklog_trial_report_limit,
+                        report_limit=1,
                         reports_used=0,
                         is_admin=False,
-                        approved_at=naive_utcnow(),
+                        approved_at=now,
+                        trial_granted_at=now,
                     )
                 else:
                     access = ArkLogAccessRecord(user_id=user.id, status="PENDING")

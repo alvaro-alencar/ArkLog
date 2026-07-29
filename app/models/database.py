@@ -30,18 +30,26 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if "sqlite" in str(engine.url):
-            columns = [
+            user_columns = [
                 ("timezone", "VARCHAR(100) DEFAULT 'America/Sao_Paulo'"),
                 ("language", "VARCHAR(10) DEFAULT 'pt-BR'"),
                 ("ark_user_id", "VARCHAR(64)"),
                 ("ark_organization_id", "VARCHAR(64)"),
                 ("is_platform_admin", "BOOLEAN NOT NULL DEFAULT 0"),
             ]
-            for column, definition in columns:
+            for column, definition in user_columns:
                 try:
-                    await conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+                    await conn.exec_driver_sql(
+                        f"ALTER TABLE users ADD COLUMN {column} {definition}"
+                    )
                 except Exception:
                     pass
+            try:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE arklog_access ADD COLUMN trial_granted_at DATETIME"
+                )
+            except Exception:
+                pass
             try:
                 await conn.exec_driver_sql(
                     "CREATE UNIQUE INDEX IF NOT EXISTS users_ark_user_id_idx ON users(ark_user_id)"

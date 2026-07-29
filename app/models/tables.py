@@ -30,6 +30,12 @@ class UserRecord(Base):
 
     projects: Mapped[list["ProjectRecord"]] = relationship(back_populates="user")
     integrations: Mapped[list["UserIntegrationRecord"]] = relationship(back_populates="user")
+    connections: Mapped[list["IntegrationConnectionRecord"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    flows: Mapped[list["AutomationFlowRecord"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     arklog_access: Mapped[Optional["ArkLogAccessRecord"]] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
@@ -59,7 +65,7 @@ class ArkLogAccessRecord(Base):
 
 
 class UserIntegrationRecord(Base):
-    """Per-user integration credentials."""
+    """Legacy integration record kept only for backward compatibility."""
 
     __tablename__ = "user_integrations"
 
@@ -74,6 +80,87 @@ class UserIntegrationRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "integration_type", name="uix_user_integration"),
+    )
+
+
+class IntegrationConnectionRecord(Base):
+    """OAuth connection owned by the Ark user who executes the flow."""
+
+    __tablename__ = "integration_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    external_account_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_account_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=naive_utcnow, onupdate=naive_utcnow
+    )
+
+    user: Mapped["UserRecord"] = relationship(back_populates="connections")
+    source_flows: Mapped[list["AutomationFlowRecord"]] = relationship(
+        foreign_keys="AutomationFlowRecord.source_connection_id",
+        back_populates="source_connection",
+    )
+    destination_flows: Mapped[list["AutomationFlowRecord"]] = relationship(
+        foreign_keys="AutomationFlowRecord.destination_connection_id",
+        back_populates="destination_connection",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "organization_id",
+            "provider",
+            "external_account_id",
+            name="uix_connection_external_account",
+        ),
+    )
+
+
+class AutomationFlowRecord(Base):
+    """Provider-agnostic source → LLM → destination configuration."""
+
+    __tablename__ = "automation_flows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_connection_id: Mapped[int] = mapped_column(
+        ForeignKey("integration_connections.id"), nullable=False
+    )
+    destination_connection_id: Mapped[int] = mapped_column(
+        ForeignKey("integration_connections.id"), nullable=False
+    )
+    source_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    destination_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    report_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=naive_utcnow, onupdate=naive_utcnow
+    )
+
+    user: Mapped["UserRecord"] = relationship(back_populates="flows")
+    source_connection: Mapped["IntegrationConnectionRecord"] = relationship(
+        foreign_keys=[source_connection_id], back_populates="source_flows"
+    )
+    destination_connection: Mapped["IntegrationConnectionRecord"] = relationship(
+        foreign_keys=[destination_connection_id], back_populates="destination_flows"
+    )
+    reports: Mapped[list["ReportRecord"]] = relationship(back_populates="flow")
+    usages: Mapped[list["ReportUsageRecord"]] = relationship(back_populates="flow")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uix_flow_user_name"),
     )
 
 
@@ -150,8 +237,10 @@ class ReportRecord(Base):
     commit_count: Mapped[int] = mapped_column(Integer, default=0)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
 
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    project: Mapped["ProjectRecord"] = relationship(back_populates="reports")
+    project_id: Mapped[Optional[int]] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    flow_id: Mapped[Optional[int]] = mapped_column(ForeignKey("automation_flows.id"), nullable=True)
+    project: Mapped[Optional["ProjectRecord"]] = relationship(back_populates="reports")
+    flow: Mapped[Optional["AutomationFlowRecord"]] = relationship(back_populates="reports")
 
     publications: Mapped[list["ReportPublicationRecord"]] = relationship(back_populates="report")
     usages: Mapped[list["ReportUsageRecord"]] = relationship(back_populates="report")
@@ -171,11 +260,13 @@ class ReportUsageRecord(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[Optional[int]] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    flow_id: Mapped[Optional[int]] = mapped_column(ForeignKey("automation_flows.id"), nullable=True)
     report_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reports.id"), nullable=True)
 
     user: Mapped["UserRecord"] = relationship(back_populates="report_usages")
-    project: Mapped["ProjectRecord"] = relationship(back_populates="usages")
+    project: Mapped[Optional["ProjectRecord"]] = relationship(back_populates="usages")
+    flow: Mapped[Optional["AutomationFlowRecord"]] = relationship(back_populates="usages")
     report: Mapped[Optional["ReportRecord"]] = relationship(back_populates="usages")
 
     __table_args__ = (

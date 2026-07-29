@@ -25,9 +25,47 @@ jobs:
           pip install -e ".[dev]"
       - name: Validate Python
         run: |
-          python -m compileall -q app api tests
-          ruff check --select E9,F app api tests
+          python -m compileall -q app api tests alembic
+          ruff check --select E9,F app api tests alembic
           ruff check app/security app/api/v1/routes/access.py tests/test_secure_access_policy.py
+      - name: Test database migrations
+        env:
+          APP_ENV: test
+          DATABASE_URL: sqlite+aiosqlite:///./data/arklog-migration-ci.db
+          SCHEDULER_ENABLED: "false"
+        run: |
+          rm -f ./data/arklog-migration-ci.db
+          alembic upgrade head
+          python - <<'PY'
+          import sqlite3
+          connection = sqlite3.connect("./data/arklog-migration-ci.db")
+          tables = {
+              row[0]
+              for row in connection.execute(
+                  "SELECT name FROM sqlite_master WHERE type='table'"
+              )
+          }
+          required = {
+              "integration_connections",
+              "automation_flows",
+              "report_usages",
+              "reports",
+          }
+          assert required <= tables, required - tables
+          report_columns = {
+              row[1]: row
+              for row in connection.execute("PRAGMA table_info(reports)")
+          }
+          usage_columns = {
+              row[1]: row
+              for row in connection.execute("PRAGMA table_info(report_usages)")
+          }
+          assert "flow_id" in report_columns
+          assert "flow_id" in usage_columns
+          assert report_columns["project_id"][3] == 0
+          assert usage_columns["project_id"][3] == 0
+          connection.close()
+          PY
       - name: Test backend
         env:
           APP_ENV: test
@@ -44,7 +82,7 @@ jobs:
         working-directory: dashboard
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm

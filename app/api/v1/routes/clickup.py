@@ -1,47 +1,26 @@
-"""ClickUp APIs restricted to the ArkLog administrator credentials."""
+"""Retired ClickUp endpoints from the pre-connection architecture."""
 
-from typing import Any
-
-from fastapi import APIRouter, Depends
-
-from app.api.v1.deps import require_admin
-from app.integrations.clickup.client import ClickUpClient
-from app.security.ark_auth import ArkIdentity
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
 
+def _retired() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "A integração global do ClickUp foi desativada. "
+            "ClickUp retornará como uma conexão pertencente ao usuário."
+        ),
+    )
+
+
 @router.get("/teams")
-async def list_clickup_teams(
-    _: ArkIdentity = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    client = ClickUpClient()
-    try:
-        teams = await client.get_teams()
-        return [
-            {"id": team["id"], "name": team["name"], "avatar": team.get("avatar")}
-            for team in teams
-        ]
-    finally:
-        await client.close()
+async def list_clickup_teams() -> None:
+    _retired()
 
 
 @router.get("/teams/{team_id}/tasks")
-async def list_clickup_tasks(
-    team_id: str,
-    _: ArkIdentity = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    client = ClickUpClient()
-    try:
-        tasks = await client.get_tasks(team_id)
-        return [
-            {
-                "id": task["id"],
-                "name": task["name"],
-                "status": task.get("status", {}).get("status"),
-                "custom_id": task.get("custom_id"),
-            }
-            for task in tasks
-        ]
-    finally:
-        await client.close()
+async def list_clickup_tasks(team_id: str) -> None:
+    del team_id
+    _retired()

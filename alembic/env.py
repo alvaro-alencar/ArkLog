@@ -1,16 +1,4 @@
-"""
-ArkLog - Alembic Environment
-
-Configured for async SQLAlchemy. The database URL comes from app settings,
-not from alembic.ini, so the same .env used at runtime drives migrations too.
-
-Usage:
-  alembic upgrade head       # apply all pending migrations
-  alembic downgrade -1       # revert the last migration
-  alembic revision --autogenerate -m "description"   # generate a new migration
-  alembic stamp head         # mark existing DB as up-to-date (use on first run
-                             # if the DB was already created via create_all)
-"""
+"""ArkLog Alembic environment."""
 
 import asyncio
 from logging.config import fileConfig
@@ -18,39 +6,45 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-# Load app models so Base.metadata knows all tables
 from app.core.config import settings
-from app.models import tables  # noqa: F401 — side-effect: registers ORM models
-from app.models.database import Base
+from app.models import tables  # noqa: F401
+from app.models.database import Base, normalize_database_url
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+migration_url = normalize_database_url(settings.database_url)
 
 
 def run_migrations_offline() -> None:
-    """Run migrations without a live DB connection (generates SQL to stdout)."""
+    """Run migrations without opening a live database connection."""
     context.configure(
-        url=settings.database_url,
+        url=migration_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def _do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        render_as_batch=connection.dialect.name == "sqlite",
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_migrations_online() -> None:
-    """Run migrations against a live async database connection."""
-    engine = create_async_engine(settings.database_url)
+    """Run migrations with the same normalized URL used by the application."""
+    engine = create_async_engine(migration_url)
     async with engine.begin() as conn:
         await conn.run_sync(_do_run_migrations)
     await engine.dispose()

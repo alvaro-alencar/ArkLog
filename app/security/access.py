@@ -42,15 +42,18 @@ async def _find_usage(user_id: int, idempotency_key: str) -> ReportUsageRecord |
 
 async def reserve_report(
     identity: ArkIdentity,
-    project_id: int,
     idempotency_key: str,
     trigger: str = "instant",
+    *,
+    project_id: int | None = None,
+    flow_id: int | None = None,
 ) -> tuple[ReportUsageRecord, bool]:
-    """Atomically reserve one report slot and create its idempotency ledger row.
-
-    ``reports_used`` intentionally includes in-flight reservations. A failed generation
-    releases the slot in :func:`fail_usage`; a successful generation keeps it consumed.
-    """
+    """Atomically reserve one report slot for exactly one project or flow."""
+    if (project_id is None) == (flow_id is None):
+        raise HTTPException(
+            status_code=400,
+            detail="A geração deve pertencer a exatamente um projeto ou fluxo.",
+        )
     if len(idempotency_key) < 16 or len(idempotency_key) > 100:
         raise HTTPException(status_code=400, detail="Chave de idempotência inválida.")
 
@@ -61,6 +64,7 @@ async def reserve_report(
         status="RESERVED",
         user_id=identity.user.id,
         project_id=project_id,
+        flow_id=flow_id,
     )
 
     try:
@@ -107,9 +111,6 @@ async def reserve_report(
             await session.refresh(usage)
             return usage, True
     except IntegrityError:
-        # Two requests with the same key may race between the initial SELECT and INSERT.
-        # The losing transaction is rolled back, including its quota increment, then the
-        # canonical ledger row is returned as an idempotent replay.
         existing = await _find_usage(identity.user.id, idempotency_key)
         if existing is not None:
             return existing, False

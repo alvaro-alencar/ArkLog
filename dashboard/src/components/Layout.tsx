@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, LayoutDashboard, LogOut, Settings, ShieldCheck, User } from 'lucide-react';
+import { FileText, FolderGit2, LogOut, Plug, Settings, ShieldCheck, User, Workflow } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -10,10 +10,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
 
   const links = [
-    { to: '/', icon: <LayoutDashboard size={18} />, label: t.nav.dashboard },
+    { to: '/', icon: <Workflow size={18} />, label: 'Fluxos' },
+    { to: '/connections', icon: <Plug size={18} />, label: 'Conexões' },
     { to: '/reports', icon: <FileText size={18} />, label: t.nav.reports },
     { to: '/settings', icon: <Settings size={18} />, label: t.nav.settings },
-    ...(access?.isAdmin ? [{ to: '/access', icon: <ShieldCheck size={18} />, label: 'Acessos' }] : []),
+    ...(access?.isAdmin ? [
+      { to: '/projects', icon: <FolderGit2 size={18} />, label: 'Projetos legados' },
+      { to: '/access', icon: <ShieldCheck size={18} />, label: 'Acessos' },
+    ] : []),
   ];
 
   const handleLogout = async () => {

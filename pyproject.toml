@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arklog"
-version = "0.2.0"
-description = "AI-powered progress reporter — GitHub activity into organizational intelligence."
+version = "0.3.0"
+description = "Provider-agnostic AI reporting flows with user-owned connections."
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
@@ -25,6 +25,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "python-multipart>=0.0.19",
     "pyjwt[crypto]>=2.10.0",
+    "cryptography>=43.0.0",
     "gitpython>=3.1.43",
 ]
 

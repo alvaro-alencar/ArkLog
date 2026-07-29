@@ -1,9 +1,4 @@
-"""
-ArkLog - Application Entry Point
-
-FastAPI application factory with lifespan management, CORS middleware,
-and modular route registration. Import `app` to run with uvicorn.
-"""
+"""ArkLog FastAPI application factory."""
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -15,15 +10,14 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
+from app.core.events import on_shutdown, on_startup
 from app.core.logging import setup_logging
-from app.core.events import on_startup, on_shutdown
 
 logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Manage application lifecycle: startup then graceful shutdown."""
     setup_logging()
     await on_startup()
     logger.info(
@@ -38,16 +32,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_application() -> FastAPI:
-    """Factory that creates and configures the FastAPI application."""
     application = FastAPI(
         title="ArkLog",
-        description="AI Progress Reporter — transforms technical activity into organizational intelligence.",
+        description="Provider-agnostic AI reporting flows with user-owned connections.",
         version=settings.app_version,
         docs_url="/docs" if settings.debug else None,
         redoc_url="/redoc" if settings.debug else None,
         lifespan=lifespan,
     )
-
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -55,8 +47,9 @@ def create_application() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
     application.include_router(v1_router, prefix=settings.api_prefix)
+    if settings.public_api_prefix != settings.api_prefix:
+        application.include_router(v1_router, prefix=settings.public_api_prefix)
 
     @application.get("/", include_in_schema=False)
     async def root() -> JSONResponse:
@@ -71,7 +64,6 @@ app = create_application()
 
 
 def main() -> None:
-    """CLI entry point."""
     import uvicorn
 
     uvicorn.run(

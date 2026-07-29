@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine
 
 import structlog
 
-if TYPE_CHECKING:
-    from app.integrations.base import BasePublisher
-
 logger = structlog.get_logger(__name__)
 EventHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
-_publishers: list["BasePublisher"] = []
 
 
 class EventBus:
@@ -47,19 +43,15 @@ async def on_startup() -> None:
     logger.info("startup_begin")
     _validate_production_config()
     await _init_database()
-    await _wire_event_handlers()
+    await _wire_legacy_event_handlers()
     await _start_scheduler()
     logger.info("startup_complete")
 
 
 async def on_shutdown() -> None:
-    global _publishers
     from app.schedulers.scheduler import stop_scheduler
 
     await stop_scheduler()
-    for publisher in _publishers:
-        await publisher.close()
-    _publishers.clear()
 
 
 def _validate_production_config() -> None:
@@ -74,6 +66,12 @@ def _validate_production_config() -> None:
         missing.append("DATABASE_URL PostgreSQL")
     if not settings.ark_auth_me_url.startswith("https://"):
         missing.append("ARK_AUTH_ME_URL HTTPS")
+    if len(settings.connections_encryption_key.strip()) < 32:
+        missing.append("CONNECTIONS_ENCRYPTION_KEY (32+ chars)")
+    if len(settings.oauth_state_secret.strip()) < 32:
+        missing.append("OAUTH_STATE_SECRET (32+ chars)")
+    if not settings.public_app_url.startswith("https://"):
+        missing.append("PUBLIC_APP_URL HTTPS")
     if missing:
         raise RuntimeError("Missing secure production configuration: " + ", ".join(missing))
 
@@ -84,20 +82,15 @@ async def _init_database() -> None:
     await init_db()
 
 
-async def _wire_event_handlers() -> None:
-    global _publishers
-    from app.integrations.clickup.publisher import ClickUpPublisher
+async def _wire_legacy_event_handlers() -> None:
+    """Keep old project reports functional without a global destination credential."""
     from app.services.commit_service import CommitService
     from app.services.report_service import ReportService
 
     commit_service = CommitService()
     report_service = ReportService()
-    clickup_publisher = ClickUpPublisher()
-    _publishers.append(clickup_publisher)
-
     event_bus.subscribe("github.push", commit_service.handle_push_event)
     event_bus.subscribe("commit.batch_ready", report_service.handle_commit_batch)
-    event_bus.subscribe("report.generated", clickup_publisher.handle_report_generated)
 
 
 async def _start_scheduler() -> None:

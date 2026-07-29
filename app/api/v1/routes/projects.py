@@ -1,12 +1,11 @@
-"""Project management APIs with Ark authorization and report quotas."""
+"""Legacy project APIs backed only by the current user's GitHub connection."""
 
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
-import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -14,12 +13,17 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.deps import get_identity
 from app.core.config import settings
 from app.models.database import AsyncSessionLocal
-from app.models.tables import ProjectRecord, ReportDestinationRecord, ReportUsageRecord
+from app.models.tables import (
+    IntegrationConnectionRecord,
+    ProjectRecord,
+    ReportUsageRecord,
+)
 from app.schemas.project import InstantReportRequest, ProjectCreate, ProjectListResponse, ProjectResponse
 from app.security.access import fail_usage, reserve_report
 from app.security.ark_auth import ArkIdentity
+from app.security.credentials import decrypt_credentials
+from app.utils.datetime_utils import naive_utcnow
 
-logger = structlog.get_logger(__name__)
 router = APIRouter()
 _REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -34,12 +38,22 @@ def _require_approved(identity: ArkIdentity) -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 
-def _github_credentials(identity: ArkIdentity) -> tuple[str | None, bool]:
-    if identity.user.github_access_token:
-        return identity.user.github_access_token, False
-    if identity.access.is_admin:
-        return settings.github_token or None, True
-    return None, False
+async def _github_token(identity: ArkIdentity) -> str | None:
+    organization_id = str(identity.ark_session["organization"]["id"])
+    async with AsyncSessionLocal() as session:
+        connection = await session.scalar(
+            select(IntegrationConnectionRecord)
+            .where(
+                IntegrationConnectionRecord.user_id == identity.user.id,
+                IntegrationConnectionRecord.organization_id == organization_id,
+                IntegrationConnectionRecord.provider == "github",
+                IntegrationConnectionRecord.status == "ACTIVE",
+            )
+            .order_by(IntegrationConnectionRecord.updated_at.desc())
+        )
+    if connection is None:
+        return None
+    return str(decrypt_credentials(connection.encrypted_credentials).get("access_token") or "") or None
 
 
 @router.get("", response_model=ProjectListResponse)
@@ -47,9 +61,7 @@ async def list_user_projects(identity: ArkIdentity = Depends(get_identity)) -> P
     _require_approved(identity)
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(ProjectRecord)
-            .where(ProjectRecord.user_id == identity.user.id)
-            .options(selectinload(ProjectRecord.destinations))
+            select(ProjectRecord).where(ProjectRecord.user_id == identity.user.id)
         )
         projects = result.scalars().all()
     from app.schemas.project import ProjectSummary
@@ -79,59 +91,50 @@ async def create_project(
             status_code=400,
             detail="Informe o repositório no formato proprietário/projeto.",
         )
-
-    if not identity.access.is_admin and data.reports:
+    if data.reports:
         raise HTTPException(
-            status_code=403,
-            detail="Integrações externas ainda não estão liberadas para esta conta.",
+            status_code=410,
+            detail="Destinos legados foram desativados. Crie um fluxo com uma conexão de destino.",
         )
-
-    if not identity.access.is_admin:
-        if identity.access.status == "TRIAL":
-            async with AsyncSessionLocal() as session:
-                count = await session.scalar(
-                    select(func.count(ProjectRecord.id)).where(
-                        ProjectRecord.user_id == identity.user.id
-                    )
+    if identity.access.status == "TRIAL":
+        async with AsyncSessionLocal() as session:
+            count = await session.scalar(
+                select(func.count(ProjectRecord.id)).where(
+                    ProjectRecord.user_id == identity.user.id
                 )
-            if int(count or 0) >= settings.arklog_trial_max_projects:
-                raise HTTPException(
-                    status_code=403,
-                    detail="O teste gratuito permite apenas um projeto.",
-                )
-
-        from app.integrations.github.api_client import fetch_repository_metadata
-
-        owner, repo = repo_full_name.split("/", 1)
-        try:
-            metadata = await fetch_repository_metadata(
-                owner, repo, token=None, use_global_token=False
             )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Use um repositório público válido enquanto não houver uma integração GitHub própria.",
-            ) from exc
-        if metadata.get("private"):
-            raise HTTPException(
-                status_code=403,
-                detail="Esta conta só pode cadastrar repositórios públicos.",
-            )
+        if int(count or 0) >= settings.arklog_trial_max_projects:
+            raise HTTPException(status_code=403, detail="O teste gratuito permite apenas um projeto.")
+
+    from app.integrations.github.api_client import fetch_repository_metadata
+
+    owner, repo = repo_full_name.split("/", 1)
+    token = await _github_token(identity)
+    try:
+        metadata = await fetch_repository_metadata(
+            owner,
+            repo,
+            token=token,
+            use_global_token=False,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Conecte o GitHub ou use um repositório público válido.",
+        ) from exc
+    if metadata.get("private") and not token:
+        raise HTTPException(status_code=403, detail="Conecte o GitHub para usar repositórios privados.")
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            collision = await session.execute(
+            collision = await session.scalar(
                 select(ProjectRecord).where(
                     ProjectRecord.name == data.name,
                     ProjectRecord.user_id == identity.user.id,
-                ).limit(1)
-            )
-            if collision.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=400,
-                    detail="Já existe um projeto com este nome na sua conta.",
                 )
-
+            )
+            if collision:
+                raise HTTPException(status_code=400, detail="Já existe um projeto com este nome.")
             project = ProjectRecord(
                 name=data.name.strip(),
                 repo_full_name=repo_full_name,
@@ -143,41 +146,24 @@ async def create_project(
             )
             session.add(project)
             await session.flush()
-
-            for destination in data.reports:
-                session.add(
-                    ReportDestinationRecord(
-                        label=destination.label,
-                        clickup_task_id=destination.clickup_task_id,
-                        schedule=destination.schedule,
-                        times=destination.times,
-                        day=destination.day,
-                        time=destination.time,
-                        report_style=destination.report_style,
-                        window_hours=destination.window_hours,
-                        project_id=project.id,
-                    )
-                )
             project_id = project.id
-
-        result = await session.execute(
+        project = await session.scalar(
             select(ProjectRecord)
             .where(ProjectRecord.id == project_id)
             .options(selectinload(ProjectRecord.destinations))
         )
-        return result.scalar_one()
+    return project
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(project_id: int, identity: ArkIdentity = Depends(get_identity)) -> Any:
     _require_approved(identity)
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        project = await session.scalar(
             select(ProjectRecord)
             .where(ProjectRecord.id == project_id, ProjectRecord.user_id == identity.user.id)
             .options(selectinload(ProjectRecord.destinations))
         )
-        project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Projeto não encontrado.")
     return project
@@ -186,18 +172,16 @@ async def get_project(project_id: int, identity: ArkIdentity = Depends(get_ident
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(project_id: int, identity: ArkIdentity = Depends(get_identity)) -> None:
     _require_approved(identity)
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            result = await session.execute(
-                select(ProjectRecord).where(
-                    ProjectRecord.id == project_id,
-                    ProjectRecord.user_id == identity.user.id,
-                )
+    async with AsyncSessionLocal() as session, session.begin():
+        project = await session.scalar(
+            select(ProjectRecord).where(
+                ProjectRecord.id == project_id,
+                ProjectRecord.user_id == identity.user.id,
             )
-            project = result.scalar_one_or_none()
-            if not project:
-                raise HTTPException(status_code=404, detail="Projeto não encontrado.")
-            await session.delete(project)
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+        await session.delete(project)
 
 
 @router.post("/{project_id}/backfill", status_code=status.HTTP_202_ACCEPTED)
@@ -209,29 +193,24 @@ async def backfill_commits(project_id: int, identity: ArkIdentity = Depends(get_
     from app.repositories.commit_repository import CommitRepository
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        project = await session.scalar(
             select(ProjectRecord).where(
                 ProjectRecord.id == project_id,
                 ProjectRecord.user_id == identity.user.id,
             )
         )
-        project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Projeto não encontrado.")
-
-    token, use_global = _github_credentials(identity)
+    token = await _github_token(identity)
     owner, repo = project.repo_full_name.split("/", 1)
-    commits = await fetch_all_commits(
-        owner, repo, token=token, use_global_token=use_global
-    )
+    commits = await fetch_all_commits(owner, repo, token=token, use_global_token=False)
     saved = 0
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            commit_repo = CommitRepository(session)
-            for commit in commits:
-                if not await commit_repo.exists_for_project(commit.sha, project_id):
-                    await commit_repo.save_commit(commit, project_id)
-                    saved += 1
+    async with AsyncSessionLocal() as session, session.begin():
+        commit_repo = CommitRepository(session)
+        for commit in commits:
+            if not await commit_repo.exists_for_project(commit.sha, project_id):
+                await commit_repo.save_commit(commit, project_id)
+                saved += 1
     return {"status": "ok", "saved": saved, "total": len(commits)}
 
 
@@ -245,29 +224,27 @@ async def trigger_instant_report(
     _require_approved(identity)
     if not idempotency_key:
         raise HTTPException(status_code=400, detail="Idempotency-Key é obrigatório.")
-
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        project = await session.scalar(
             select(ProjectRecord)
             .where(ProjectRecord.id == project_id, ProjectRecord.user_id == identity.user.id)
             .options(selectinload(ProjectRecord.destinations))
         )
-        project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Projeto não encontrado.")
 
     window_hours = data.window_hours
-    if identity.access.status == "TRIAL":
-        if window_hours <= 0 or window_hours > settings.arklog_trial_max_window_hours:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "O teste gratuito cobre no máximo "
-                    f"{settings.arklog_trial_max_window_hours // 24} dias."
-                ),
-            )
+    if identity.access.status == "TRIAL" and (
+        window_hours <= 0 or window_hours > settings.arklog_trial_max_window_hours
+    ):
+        raise HTTPException(status_code=400, detail="O teste gratuito cobre no máximo sete dias.")
 
-    usage, is_new = await reserve_report(identity, project_id, idempotency_key)
+    usage, is_new = await reserve_report(
+        identity,
+        idempotency_key,
+        trigger="instant",
+        project_id=project_id,
+    )
     if not is_new:
         return {
             "status": usage.status.lower(),
@@ -276,10 +253,9 @@ async def trigger_instant_report(
             "idempotent_replay": True,
         }
 
-    since = datetime.utcnow() - timedelta(hours=window_hours) if window_hours > 0 else None
-    token, use_global = _github_credentials(identity)
+    since = naive_utcnow() - timedelta(hours=window_hours) if window_hours > 0 else None
+    token = await _github_token(identity)
     owner, repo = project.repo_full_name.split("/", 1)
-
     try:
         from app.integrations.github.api_client import fetch_github_activity
 
@@ -288,11 +264,9 @@ async def trigger_instant_report(
             repo,
             since=since,
             token=token,
-            use_global_token=use_global,
+            use_global_token=False,
             trial_limits=identity.access.status == "TRIAL",
         )
-
-        destination = project.destinations[0] if project.destinations else None
         from app.core.events import event_bus
 
         await event_bus.publish(
@@ -306,9 +280,8 @@ async def trigger_instant_report(
                 "description": project.description,
                 "tech_stack": project.tech_stack,
                 "business_context": project.business_context,
-                "report_style": (destination.report_style if destination else None)
-                or project.report_style,
-                "clickup_task_id": destination.clickup_task_id if destination else "",
+                "report_style": project.report_style,
+                "clickup_task_id": "",
                 "trigger": "instant",
                 **activity,
                 "commit_count": len(activity["commits"]),
@@ -319,16 +292,14 @@ async def trigger_instant_report(
         raise HTTPException(status_code=502, detail="Não foi possível gerar o relatório.") from exc
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        final_usage = await session.scalar(
             select(ReportUsageRecord).where(ReportUsageRecord.id == usage.id)
         )
-        final_usage = result.scalar_one()
-
     total_activity = sum(len(values) for values in activity.values())
     return {
-        "status": final_usage.status.lower(),
-        "usage_id": final_usage.id,
-        "report_id": final_usage.report_id,
+        "status": final_usage.status.lower() if final_usage else "completed",
+        "usage_id": usage.id,
+        "report_id": final_usage.report_id if final_usage else None,
         "commit_count": len(activity["commits"]),
         "total_activity": total_activity,
         "idempotent_replay": False,

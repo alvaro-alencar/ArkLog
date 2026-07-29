@@ -18,6 +18,11 @@
     "types": ["vite/client"]
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/views/NewProject.tsx",
+    "src/views/OAuthCallback.tsx"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

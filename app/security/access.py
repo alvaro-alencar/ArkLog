@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.models.database import AsyncSessionLocal
 from app.models.tables import ArkLogAccessRecord, ReportUsageRecord
@@ -28,76 +29,129 @@ def public_access(access: ArkLogAccessRecord) -> dict:
     }
 
 
+async def _find_usage(user_id: int, idempotency_key: str) -> ReportUsageRecord | None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ReportUsageRecord).where(
+                ReportUsageRecord.user_id == user_id,
+                ReportUsageRecord.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
 async def reserve_report(
     identity: ArkIdentity,
     project_id: int,
     idempotency_key: str,
     trigger: str = "instant",
 ) -> tuple[ReportUsageRecord, bool]:
+    """Atomically reserve one report slot and create its idempotency ledger row.
+
+    ``reports_used`` intentionally includes in-flight reservations. A failed generation
+    releases the slot in :func:`fail_usage`; a successful generation keeps it consumed.
+    """
     if len(idempotency_key) < 16 or len(idempotency_key) > 100:
         raise HTTPException(status_code=400, detail="Chave de idempotência inválida.")
 
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            existing_result = await session.execute(
-                select(ReportUsageRecord).where(
-                    ReportUsageRecord.user_id == identity.user.id,
-                    ReportUsageRecord.idempotency_key == idempotency_key,
-                )
-            )
-            existing = existing_result.scalar_one_or_none()
-            if existing:
-                return existing, False
+    usage = ReportUsageRecord(
+        id=str(uuid.uuid4()),
+        idempotency_key=idempotency_key,
+        trigger=trigger,
+        status="RESERVED",
+        user_id=identity.user.id,
+        project_id=project_id,
+    )
 
-            updated = await session.execute(
-                update(ArkLogAccessRecord)
-                .where(
-                    ArkLogAccessRecord.id == identity.access.id,
-                    ArkLogAccessRecord.status.in_(APPROVED_STATUSES),
-                    or_(
-                        ArkLogAccessRecord.report_limit < 0,
-                        ArkLogAccessRecord.reports_used < ArkLogAccessRecord.report_limit,
-                    ),
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                existing_result = await session.execute(
+                    select(ReportUsageRecord).where(
+                        ReportUsageRecord.user_id == identity.user.id,
+                        ReportUsageRecord.idempotency_key == idempotency_key,
+                    )
                 )
-                .values(reports_used=ArkLogAccessRecord.reports_used + 1)
-                .returning(ArkLogAccessRecord.id)
-            )
-            if updated.scalar_one_or_none() is None:
-                if identity.access.status == "PENDING":
-                    raise HTTPException(status_code=403, detail="Acesso ao ArkLog ainda não foi liberado.")
-                if identity.access.status == "BLOCKED":
-                    raise HTTPException(status_code=403, detail="Acesso ao ArkLog bloqueado.")
-                raise HTTPException(status_code=403, detail="A cota de relatórios desta conta terminou.")
+                existing = existing_result.scalar_one_or_none()
+                if existing:
+                    return existing, False
 
-            usage = ReportUsageRecord(
-                id=str(uuid.uuid4()),
-                idempotency_key=idempotency_key,
-                trigger=trigger,
-                status="RESERVED",
-                user_id=identity.user.id,
-                project_id=project_id,
-            )
-            session.add(usage)
-            await session.flush()
-        await session.refresh(usage)
-        return usage, True
+                updated = await session.execute(
+                    update(ArkLogAccessRecord)
+                    .where(
+                        ArkLogAccessRecord.id == identity.access.id,
+                        ArkLogAccessRecord.status.in_(APPROVED_STATUSES),
+                        or_(
+                            ArkLogAccessRecord.report_limit < 0,
+                            ArkLogAccessRecord.reports_used < ArkLogAccessRecord.report_limit,
+                        ),
+                    )
+                    .values(reports_used=ArkLogAccessRecord.reports_used + 1)
+                    .returning(ArkLogAccessRecord.id)
+                )
+                if updated.scalar_one_or_none() is None:
+                    if identity.access.status == "PENDING":
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Acesso ao ArkLog ainda não foi liberado.",
+                        )
+                    if identity.access.status == "BLOCKED":
+                        raise HTTPException(status_code=403, detail="Acesso ao ArkLog bloqueado.")
+                    raise HTTPException(
+                        status_code=403,
+                        detail="A cota de relatórios desta conta terminou.",
+                    )
+
+                session.add(usage)
+                await session.flush()
+            await session.refresh(usage)
+            return usage, True
+    except IntegrityError:
+        # Two requests with the same key may race between the initial SELECT and INSERT.
+        # The losing transaction is rolled back, including its quota increment, then the
+        # canonical ledger row is returned as an idempotent replay.
+        existing = await _find_usage(identity.user.id, idempotency_key)
+        if existing is not None:
+            return existing, False
+        raise
 
 
 async def complete_usage(usage_id: str, report_id: int) -> None:
     async with AsyncSessionLocal() as session, session.begin():
         await session.execute(
             update(ReportUsageRecord)
-            .where(ReportUsageRecord.id == usage_id)
+            .where(
+                ReportUsageRecord.id == usage_id,
+                ReportUsageRecord.status == "RESERVED",
+            )
             .values(status="COMPLETED", report_id=report_id, completed_at=naive_utcnow())
         )
 
 
 async def fail_usage(usage_id: str | None, error: str) -> None:
+    """Mark a reservation failed and return its quota slot exactly once."""
     if not usage_id:
         return
+
     async with AsyncSessionLocal() as session, session.begin():
-        await session.execute(
+        failed = await session.execute(
             update(ReportUsageRecord)
-            .where(ReportUsageRecord.id == usage_id)
+            .where(
+                ReportUsageRecord.id == usage_id,
+                ReportUsageRecord.status == "RESERVED",
+            )
             .values(status="FAILED", error_message=error[:2000], completed_at=naive_utcnow())
+            .returning(ReportUsageRecord.user_id)
+        )
+        user_id = failed.scalar_one_or_none()
+        if user_id is None:
+            return
+
+        await session.execute(
+            update(ArkLogAccessRecord)
+            .where(
+                ArkLogAccessRecord.user_id == user_id,
+                ArkLogAccessRecord.reports_used > 0,
+            )
+            .values(reports_used=ArkLogAccessRecord.reports_used - 1)
         )

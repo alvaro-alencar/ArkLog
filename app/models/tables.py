@@ -48,6 +48,7 @@ class ArkLogAccessRecord(Base):
     reports_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    trial_granted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     blocked_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utcnow)
     updated_at: Mapped[datetime] = mapped_column(

@@ -63,7 +63,6 @@ async def resolve_identity(token: str) -> ArkIdentity:
     ark_org = ark_session["organization"]
     ark_user_id = str(ark_user["id"])
     email = str(ark_user.get("email") or "").strip().lower()
-    name = str(ark_user.get("name") or email or ark_user_id).strip()
     is_admin = bool(ark_user.get("isPlatformAdmin")) or email in settings.admin_email_set
 
     async with AsyncSessionLocal() as session:

@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Github, MessageSquare, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowRight, GitBranch, MessageSquare, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import api from '../lib/api';
 
 type Connection = {
@@ -210,7 +210,7 @@ const Flows: React.FC = () => {
             </label>
 
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 font-bold"><Github size={19} /> Fonte GitHub</div>
+              <div className="flex items-center gap-2 font-bold"><GitBranch size={19} /> Fonte GitHub</div>
               <label className="mt-4 block text-sm font-semibold">Conta conectada
                 <select required value={form.sourceConnectionId} onChange={(event) => changeSource(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
                   <option value="">Escolha a conta</option>
@@ -285,7 +285,7 @@ const Flows: React.FC = () => {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">{flow.status}</span></div>
                 <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center">
-                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><Github size={17} /><span className="truncate">{flow.sourceConfig.repository}</span></span>
+                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><GitBranch size={17} /><span className="truncate">{flow.sourceConfig.repository}</span></span>
                   <ArrowRight size={18} className="hidden shrink-0 sm:block" />
                   <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><MessageSquare size={17} /><span className="truncate">{flow.destinationConfig.channelLabel || flow.destinationConfig.channel}</span></span>
                 </div>

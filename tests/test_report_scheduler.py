@@ -1,7 +1,7 @@
 """Tests for trusted report scheduler job registration."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -50,6 +50,12 @@ def weekly_destination(destination_id: int, day: str, time: str) -> SimpleNamesp
     )
 
 
+def project_repository(projects: list[SimpleNamespace]) -> MagicMock:
+    repository = MagicMock()
+    repository.get_all_active = AsyncMock(return_value=projects)
+    return repository
+
+
 @pytest.mark.asyncio
 async def test_registers_only_trusted_admin_schedules() -> None:
     project = SimpleNamespace(
@@ -61,8 +67,7 @@ async def test_registers_only_trusted_admin_schedules() -> None:
         ],
     )
     scheduler = MagicMock()
-    repository = MagicMock()
-    repository.get_all_active.return_value = [project]
+    repository = project_repository([project])
 
     with (
         patch(
@@ -90,8 +95,7 @@ async def test_does_not_register_jobs_without_authorized_admin_access() -> None:
         destinations=[daily_destination(21, "09:00")],
     )
     scheduler = MagicMock()
-    repository = MagicMock()
-    repository.get_all_active.return_value = [project]
+    repository = project_repository([project])
 
     with (
         patch("app.schedulers.report_scheduler.AsyncSessionLocal", FakeSessionFactory(None)),
@@ -106,8 +110,7 @@ async def test_does_not_register_jobs_without_authorized_admin_access() -> None:
 @pytest.mark.asyncio
 async def test_no_projects_creates_no_jobs() -> None:
     scheduler = MagicMock()
-    repository = MagicMock()
-    repository.get_all_active.return_value = []
+    repository = project_repository([])
 
     with (
         patch("app.schedulers.report_scheduler.AsyncSessionLocal", FakeSessionFactory(None)),

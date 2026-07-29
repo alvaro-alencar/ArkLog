@@ -1,22 +1,22 @@
-"""ArkLog - Report History Endpoints."""
+"""Report history scoped to the authenticated Ark user."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.api.v1.deps import get_current_user
 from app.models.database import AsyncSessionLocal
-from app.models.tables import ProjectRecord, ReportRecord, UserRecord
-from app.repositories.report_repository import ReportRepository
+from app.models.tables import AutomationFlowRecord, ProjectRecord, ReportRecord, UserRecord
 from app.schemas.report import ReportDetailResponse, ReportListResponse, ReportSummaryResponse
 
 router = APIRouter()
 
 
-def _to_summary(record: ReportRecord, project_name: str) -> ReportSummaryResponse:
+def _to_summary(record: ReportRecord, owner_name: str) -> ReportSummaryResponse:
     return ReportSummaryResponse(
         id=record.id,
         project_id=record.project_id,
-        project_name=project_name,
+        flow_id=record.flow_id,
+        project_name=owner_name,
         trigger=record.trigger,
         status=record.status,
         summary=record.summary,
@@ -28,43 +28,67 @@ def _to_summary(record: ReportRecord, project_name: str) -> ReportSummaryRespons
 @router.get("", response_model=ReportListResponse)
 async def list_reports(
     project_id: int | None = Query(default=None),
+    flow_id: int | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     current_user: UserRecord = Depends(get_current_user),
 ) -> ReportListResponse:
-    """All reports for the current user, optionally filtered by project."""
     async with AsyncSessionLocal() as session:
-        # Fetch user's projects to build a name map and scope by ownership
-        proj_result = await session.execute(
+        projects_result = await session.execute(
             select(ProjectRecord).where(ProjectRecord.user_id == current_user.id)
         )
-        user_projects = {p.id: p.name for p in proj_result.scalars().all()}
+        flows_result = await session.execute(
+            select(AutomationFlowRecord).where(AutomationFlowRecord.user_id == current_user.id)
+        )
+        projects = {item.id: item.name for item in projects_result.scalars().all()}
+        flows = {item.id: item.name for item in flows_result.scalars().all()}
 
-        if not user_projects:
+        ownership = []
+        if project_id is not None:
+            if project_id not in projects:
+                return ReportListResponse(total=0, limit=limit, offset=offset, reports=[])
+            ownership.append(ReportRecord.project_id == project_id)
+        elif flow_id is not None:
+            if flow_id not in flows:
+                return ReportListResponse(total=0, limit=limit, offset=offset, reports=[])
+            ownership.append(ReportRecord.flow_id == flow_id)
+        else:
+            if projects:
+                ownership.append(ReportRecord.project_id.in_(list(projects)))
+            if flows:
+                ownership.append(ReportRecord.flow_id.in_(list(flows)))
+
+        if not ownership:
             return ReportListResponse(total=0, limit=limit, offset=offset, reports=[])
 
-        project_ids = [project_id] if project_id and project_id in user_projects else list(user_projects.keys())
-
-        stmt = (
-            select(ReportRecord)
-            .where(ReportRecord.project_id.in_(project_ids))
-            .order_by(ReportRecord.generated_at.desc())
-            .limit(limit)
-            .offset(offset)
+        predicate = or_(*ownership)
+        records = list(
+            (
+                await session.execute(
+                    select(ReportRecord)
+                    .where(predicate)
+                    .order_by(ReportRecord.generated_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+            )
+            .scalars()
+            .all()
         )
-        records = list((await session.execute(stmt)).scalars().all())
-
-        from sqlalchemy import func
-        total_result = await session.execute(
-            select(func.count(ReportRecord.id)).where(ReportRecord.project_id.in_(project_ids))
+        total = int(
+            await session.scalar(select(func.count(ReportRecord.id)).where(predicate)) or 0
         )
-        total = total_result.scalar_one()
+
+    def owner_name(record: ReportRecord) -> str:
+        if record.flow_id is not None:
+            return flows.get(record.flow_id, "Fluxo removido")
+        return projects.get(record.project_id or -1, "Projeto removido")
 
     return ReportListResponse(
         total=total,
         limit=limit,
         offset=offset,
-        reports=[_to_summary(r, user_projects.get(r.project_id, "unknown")) for r in records],
+        reports=[_to_summary(record, owner_name(record)) for record in records],
     )
 
 
@@ -73,27 +97,37 @@ async def get_report(
     report_id: int,
     current_user: UserRecord = Depends(get_current_user),
 ) -> ReportDetailResponse:
-    """Full content of a single report (scoped to current user)."""
     async with AsyncSessionLocal() as session:
-        repo = ReportRepository(session)
-        record = await repo.get_by_id(report_id)
-        if not record:
-            raise HTTPException(status_code=404, detail="Report not found")
+        record = await session.get(ReportRecord, report_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Relatório não encontrado.")
 
-        proj_result = await session.execute(
-            select(ProjectRecord).where(
-                ProjectRecord.id == record.project_id,
-                ProjectRecord.user_id == current_user.id,
+        owner_name: str | None = None
+        if record.flow_id is not None:
+            flow = await session.scalar(
+                select(AutomationFlowRecord).where(
+                    AutomationFlowRecord.id == record.flow_id,
+                    AutomationFlowRecord.user_id == current_user.id,
+                )
             )
-        )
-        project = proj_result.scalar_one_or_none()
-        if not project:
-            raise HTTPException(status_code=404, detail="Report not found")
+            owner_name = flow.name if flow else None
+        elif record.project_id is not None:
+            project = await session.scalar(
+                select(ProjectRecord).where(
+                    ProjectRecord.id == record.project_id,
+                    ProjectRecord.user_id == current_user.id,
+                )
+            )
+            owner_name = project.name if project else None
+
+        if owner_name is None:
+            raise HTTPException(status_code=404, detail="Relatório não encontrado.")
 
     return ReportDetailResponse(
         id=record.id,
         project_id=record.project_id,
-        project_name=project.name,
+        flow_id=record.flow_id,
+        project_name=owner_name,
         trigger=record.trigger,
         status=record.status,
         summary=record.summary,

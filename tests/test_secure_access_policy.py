@@ -49,35 +49,34 @@ async def test_failed_generation_returns_the_trial_slot_exactly_once() -> None:
     await init_db()
     unique = uuid4().hex
 
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            user = UserRecord(
-                username=f"quota-{unique}@example.com",
-                email=f"quota-{unique}@example.com",
-                github_access_token="",
-                ark_user_id=f"ark-{unique}",
-                ark_organization_id=f"org-{unique}",
-            )
-            session.add(user)
-            await session.flush()
+    async with AsyncSessionLocal() as session, session.begin():
+        user = UserRecord(
+            username=f"quota-{unique}@example.com",
+            email=f"quota-{unique}@example.com",
+            github_access_token="",
+            ark_user_id=f"ark-{unique}",
+            ark_organization_id=f"org-{unique}",
+        )
+        session.add(user)
+        await session.flush()
 
-            access = ArkLogAccessRecord(
-                user_id=user.id,
-                status="TRIAL",
-                report_limit=1,
-                reports_used=0,
-                is_admin=False,
-            )
-            project = ProjectRecord(
-                name=f"project-{unique}",
-                repo_full_name="octocat/Hello-World",
-                user_id=user.id,
-            )
-            session.add_all([access, project])
-            await session.flush()
-            user_id = user.id
-            project_id = project.id
-            access_id = access.id
+        access = ArkLogAccessRecord(
+            user_id=user.id,
+            status="TRIAL",
+            report_limit=1,
+            reports_used=0,
+            is_admin=False,
+        )
+        project = ProjectRecord(
+            name=f"project-{unique}",
+            repo_full_name="octocat/Hello-World",
+            user_id=user.id,
+        )
+        session.add_all([access, project])
+        await session.flush()
+        user_id = user.id
+        project_id = project.id
+        access_id = access.id
 
     identity = SimpleNamespace(
         user=SimpleNamespace(id=user_id),

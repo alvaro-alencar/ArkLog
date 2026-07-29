@@ -8,9 +8,9 @@
   "routes": [
     { "src": "/api/arklog/v1/(.*)", "dest": "/api/index.py" },
     { "src": "/api/v1/(.*)", "dest": "/api/index.py" },
-    { "src": "/arklog/assets/(.*)", "dest": "/assets/$1" },
-    { "src": "/arklog/(.*\\.(?:png|jpg|jpeg|svg|ico|webp))", "dest": "/$1" },
-    { "src": "/arklog(?:/.*)?", "dest": "/index.html" },
+    { "src": "/arklog/assets/(.*)", "dest": "/dashboard/assets/$1" },
+    { "src": "/arklog/(.*\\.(?:png|jpg|jpeg|svg|ico|webp))", "dest": "/dashboard/$1" },
+    { "src": "/arklog(?:/.*)?", "dest": "/dashboard/index.html" },
     { "src": "/", "status": 302, "headers": { "Location": "/arklog" } }
   ]
 }

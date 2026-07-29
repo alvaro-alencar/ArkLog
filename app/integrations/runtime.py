@@ -34,6 +34,7 @@ async def collect_source(
     since: datetime | None,
     trial_limits: bool,
 ) -> dict[str, Any]:
+    """Collect a provider payload and attach a provider-neutral event envelope."""
     if connection.provider != "github":
         raise IntegrationRuntimeError(
             f"Provider {connection.provider} is not available as a source yet."
@@ -49,7 +50,7 @@ async def collect_source(
 
     from app.integrations.github.api_client import fetch_github_activity
 
-    return await fetch_github_activity(
+    activity = await fetch_github_activity(
         owner,
         repo,
         since=since,
@@ -57,6 +58,12 @@ async def collect_source(
         use_global_token=False,
         trial_limits=trial_limits,
     )
+    return {
+        **activity,
+        "source_provider": "github",
+        "source_label": repo_full_name,
+        "normalized_events": _normalize_github_activity(repo_full_name, activity),
+    }
 
 
 async def publish_destination(
@@ -99,6 +106,87 @@ async def publish_destination(
         "target_id": channel_id,
         "provider": "slack",
     }
+
+
+def _normalize_github_activity(
+    source_label: str,
+    activity: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Turn GitHub-specific objects into the stable contract consumed by the LLM."""
+    events: list[dict[str, Any]] = []
+    for item in activity.get("commits", []):
+        events.append(
+            {
+                "type": "change",
+                "source": "github",
+                "container": source_label,
+                "title": item.get("subject", ""),
+                "description": item.get("body", ""),
+                "actor": item.get("author", ""),
+                "status": "completed",
+                "occurred_at": item.get("committed_at", ""),
+                "reference": item.get("short_sha", ""),
+            }
+        )
+    for item in activity.get("pull_requests", []):
+        events.append(
+            {
+                "type": "review",
+                "source": "github",
+                "container": source_label,
+                "title": item.get("title", ""),
+                "description": item.get("body", ""),
+                "actor": item.get("author", ""),
+                "status": item.get("state", ""),
+                "occurred_at": item.get("merged_at") or item.get("closed_at") or item.get("created_at", ""),
+                "reference": f"PR #{item.get('number')}",
+                "labels": item.get("labels", []),
+            }
+        )
+    for item in activity.get("issues", []):
+        events.append(
+            {
+                "type": "work_item",
+                "source": "github",
+                "container": source_label,
+                "title": item.get("title", ""),
+                "description": item.get("body", ""),
+                "actor": item.get("author", ""),
+                "status": item.get("state", ""),
+                "occurred_at": item.get("closed_at") or item.get("created_at", ""),
+                "reference": f"Issue #{item.get('number')}",
+                "labels": item.get("labels", []),
+            }
+        )
+    for item in activity.get("workflow_runs", []):
+        events.append(
+            {
+                "type": "automation",
+                "source": "github",
+                "container": source_label,
+                "title": item.get("name", ""),
+                "description": item.get("commit_subject", ""),
+                "actor": "",
+                "status": item.get("conclusion") or item.get("status", ""),
+                "occurred_at": item.get("created_at", ""),
+                "reference": item.get("branch", ""),
+            }
+        )
+    for item in activity.get("releases", []):
+        events.append(
+            {
+                "type": "release",
+                "source": "github",
+                "container": source_label,
+                "title": item.get("name", ""),
+                "description": item.get("body", ""),
+                "actor": item.get("author", ""),
+                "status": "prerelease" if item.get("prerelease") else "published",
+                "occurred_at": item.get("published_at", ""),
+                "reference": item.get("tag", ""),
+            }
+        )
+    return events
 
 
 async def _github_repositories(credentials: dict[str, Any]) -> list[dict[str, Any]]:

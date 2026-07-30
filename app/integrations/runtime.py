@@ -47,12 +47,6 @@ async def collect_source(
     repo_full_name = str(config.get("repository") or "").strip()
     if "/" not in repo_full_name:
         raise IntegrationRuntimeError("Choose a GitHub repository for the source.")
-    try:
-        repository_id = int(config.get("repositoryId") or 0)
-    except (TypeError, ValueError) as exc:
-        raise IntegrationRuntimeError("Choose the GitHub repository again.") from exc
-    if repository_id <= 0:
-        raise IntegrationRuntimeError("Choose the GitHub repository again.")
 
     credentials = decrypt_credentials(connection.encrypted_credentials)
     try:
@@ -63,6 +57,22 @@ async def collect_source(
         raise IntegrationRuntimeError("Reinstall the GitHub App before running this flow.")
 
     try:
+        selected_repositories = await list_installation_repositories(installation_id)
+        selected = next(
+            (
+                item
+                for item in selected_repositories
+                if str(item.get("full_name") or "").casefold() == repo_full_name.casefold()
+            ),
+            None,
+        )
+        if selected is None:
+            raise IntegrationRuntimeError(
+                "This repository is no longer selected in the GitHub App installation."
+            )
+        repository_id = int(selected.get("id") or 0)
+        if repository_id <= 0:
+            raise IntegrationRuntimeError("GitHub returned an invalid repository selection.")
         token = await create_installation_token(
             installation_id,
             repository_id=repository_id,

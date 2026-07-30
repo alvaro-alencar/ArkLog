@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     github_app_private_key: str = Field(default="")
     github_client_id: str = Field(default="")
     github_client_secret: str = Field(default="")
+    github_setup_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/github/setup"
+    )
     github_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/connections/github/callback"
     )
@@ -133,6 +136,7 @@ class Settings(BaseSettings):
                 self.github_app_private_key,
                 self.github_client_id,
                 self.github_client_secret,
+                self.github_setup_uri,
                 self.github_redirect_uri,
             )
         )

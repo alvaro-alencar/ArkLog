@@ -17,8 +17,10 @@ def normalize_database_url(value: str) -> str:
     """Accept standard Neon/Postgres URLs and select SQLAlchemy's asyncpg dialect.
 
     Neon connection strings may include ``channel_binding``, which asyncpg does
-    not recognize as a connection option. Keeping it would make asyncpg forward
-    the value as a PostgreSQL server setting and the connection would fail.
+    not recognize through SQLAlchemy's keyword-based connection adapter. SQLAlchemy
+    also parses ``sslmode`` out of the DSN and forwards it as a keyword, while
+    asyncpg's keyword is named ``ssl``. Translate the standard Neon URL before the
+    engine is created so callers can paste the connection string directly.
     """
     raw = value.strip()
     if raw.startswith("sqlite"):
@@ -31,11 +33,19 @@ def normalize_database_url(value: str) -> str:
     elif scheme != "postgresql+asyncpg":
         return raw
 
-    query = [
-        (key, item)
-        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() != "channel_binding"
-    ]
+    parsed_query = parse_qsl(parsed.query, keep_blank_values=True)
+    has_explicit_ssl = any(key.lower() == "ssl" for key, _ in parsed_query)
+    query: list[tuple[str, str]] = []
+    for key, item in parsed_query:
+        lowered = key.lower()
+        if lowered == "channel_binding":
+            continue
+        if lowered == "sslmode":
+            if not has_explicit_ssl:
+                query.append(("ssl", item))
+            continue
+        query.append((key, item))
+
     return urlunsplit((scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 

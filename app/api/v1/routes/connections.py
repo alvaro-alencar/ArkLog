@@ -1,17 +1,23 @@
-"""User-owned connections for ArkLog sources and destinations."""
+"""User-owned connections for interchangeable ArkLog sources and destinations."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 
 from app.api.v1.deps import get_identity
 from app.core.config import settings
+from app.integrations.catalog import (
+    provider_definition,
+    provider_is_configured,
+    public_provider_catalog,
+)
 from app.integrations.github.app_auth import (
     GitHubAppError,
     exchange_user_code,
@@ -29,12 +35,30 @@ router = APIRouter()
 _ALLOWED = {"TRIAL", "ACTIVE"}
 
 
+class TrelloCallback(BaseModel):
+    token: str = Field(min_length=10, max_length=1000)
+    state: str = Field(min_length=20, max_length=4000)
+
+
 def _require_access(identity: ArkIdentity) -> None:
     if identity.access.status not in _ALLOWED:
         raise HTTPException(status_code=403, detail="Acesso ao ArkLog não autorizado.")
 
 
+def _require_provider(provider: str) -> None:
+    if not provider_is_configured(provider):
+        name = provider_definition(provider).name
+        raise HTTPException(
+            status_code=503,
+            detail=f"A conexão {name} ainda não foi configurada pela ArkSystem.",
+        )
+
+
 def _serialize(connection: IntegrationConnectionRecord) -> dict[str, Any]:
+    try:
+        capabilities = list(provider_definition(connection.provider).capabilities)
+    except ValueError:
+        capabilities = []
     return {
         "id": connection.id,
         "provider": connection.provider,
@@ -43,6 +67,7 @@ def _serialize(connection: IntegrationConnectionRecord) -> dict[str, Any]:
         "externalAccountName": connection.external_account_name,
         "scopes": connection.scopes,
         "details": connection.details,
+        "capabilities": capabilities,
         "status": connection.status,
         "connectedAt": connection.connected_at.isoformat(),
         "updatedAt": connection.updated_at.isoformat(),
@@ -83,10 +108,7 @@ async def list_connections(identity: ArkIdentity = Depends(get_identity)) -> dic
         connections = result.scalars().all()
     return {
         "connections": [_serialize(connection) for connection in connections],
-        "providers": {
-            "github": {"configured": settings.github_app_configured},
-            "slack": {"configured": settings.slack_oauth_configured},
-        },
+        "providers": public_provider_catalog(),
     }
 
 
@@ -94,8 +116,7 @@ async def list_connections(identity: ArkIdentity = Depends(get_identity)) -> dic
 async def start_github(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
     """Start a GitHub App installation where the user chooses repositories."""
     _require_access(identity)
-    if not settings.github_app_configured:
-        raise HTTPException(status_code=503, detail="GitHub App ainda não foi configurado.")
+    _require_provider("github")
     organization_id = str(identity.ark_session["organization"]["id"])
     state_token = create_oauth_state("github", identity.user.id, organization_id)
     query = urlencode({"state": state_token})
@@ -188,15 +209,14 @@ async def github_callback(code: str = Query(...), state: str = Query(...)) -> Re
 @router.get("/slack/start")
 async def start_slack(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
     _require_access(identity)
-    if not settings.slack_oauth_configured:
-        raise HTTPException(status_code=503, detail="Slack OAuth ainda não foi configurado.")
+    _require_provider("slack")
     organization_id = str(identity.ark_session["organization"]["id"])
     state_token = create_oauth_state("slack", identity.user.id, organization_id)
     query = urlencode(
         {
             "client_id": settings.slack_client_id,
             "redirect_uri": settings.slack_redirect_uri,
-            "scope": "channels:read,groups:read,chat:write",
+            "scope": "channels:read,groups:read,channels:history,groups:history,chat:write",
             "state": state_token,
         }
     )
@@ -225,7 +245,7 @@ async def slack_callback(code: str = Query(...), state: str = Query(...)) -> Red
         raise HTTPException(status_code=502, detail="Slack não concluiu a autorização.")
     team = payload.get("team") or {}
     authed_user = payload.get("authed_user") or {}
-    scope = [
+    scopes = [
         item.strip()
         for item in str(payload.get("scope") or "").split(",")
         if item.strip()
@@ -241,8 +261,9 @@ async def slack_callback(code: str = Query(...), state: str = Query(...)) -> Red
             "bot_token": payload["access_token"],
             "bot_user_id": payload.get("bot_user_id"),
             "authed_user_id": authed_user.get("id"),
+            "scopes": scopes,
         },
-        scopes=scope,
+        scopes=scopes,
         details={"teamId": team.get("id"), "teamName": team.get("name")},
     )
     return RedirectResponse(
@@ -250,9 +271,204 @@ async def slack_callback(code: str = Query(...), state: str = Query(...)) -> Red
     )
 
 
+@router.get("/notion/start")
+async def start_notion(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
+    _require_access(identity)
+    _require_provider("notion")
+    organization_id = str(identity.ark_session["organization"]["id"])
+    state_token = create_oauth_state("notion", identity.user.id, organization_id)
+    query = urlencode(
+        {
+            "owner": "user",
+            "client_id": settings.notion_client_id,
+            "redirect_uri": settings.notion_redirect_uri,
+            "response_type": "code",
+            "state": state_token,
+        }
+    )
+    return {
+        "authorizationUrl": f"https://api.notion.com/v1/oauth/authorize?{query}"
+    }
+
+
+@router.get("/notion/callback")
+async def notion_callback(code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
+    try:
+        signed = decode_oauth_state(state, "notion")
+    except OAuthStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.post(
+            f"{settings.notion_api_base_url}/oauth/token",
+            auth=httpx.BasicAuth(settings.notion_client_id, settings.notion_client_secret),
+            headers={
+                "Content-Type": "application/json",
+                "Notion-Version": settings.notion_api_version,
+            },
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.notion_redirect_uri,
+            },
+        )
+    payload = response.json()
+    if not response.is_success or not payload.get("access_token"):
+        raise HTTPException(status_code=502, detail="Notion não concluiu a autorização.")
+    workspace_id = str(payload.get("workspace_id") or payload.get("bot_id") or "")
+    workspace_name = str(payload.get("workspace_name") or "Notion")
+    await _upsert_connection(
+        user_id=int(signed["user_id"]),
+        organization_id=str(signed["organization_id"]),
+        provider="notion",
+        label=f"Notion · {workspace_name}",
+        external_account_id=workspace_id,
+        external_account_name=workspace_name,
+        credentials={
+            "access_token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token"),
+            "bot_id": payload.get("bot_id"),
+            "workspace_id": workspace_id,
+        },
+        scopes=["read_content", "insert_content", "update_content"],
+        details={
+            "workspaceId": workspace_id,
+            "workspaceName": workspace_name,
+            "workspaceIcon": payload.get("workspace_icon"),
+            "botId": payload.get("bot_id"),
+        },
+    )
+    return RedirectResponse(
+        f"{settings.public_app_url.rstrip('/')}/connections?connected=notion"
+    )
+
+
+@router.get("/clickup/start")
+async def start_clickup(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
+    _require_access(identity)
+    _require_provider("clickup")
+    organization_id = str(identity.ark_session["organization"]["id"])
+    state_token = create_oauth_state("clickup", identity.user.id, organization_id)
+    query = urlencode(
+        {
+            "client_id": settings.clickup_client_id,
+            "redirect_uri": settings.clickup_redirect_uri,
+            "state": state_token,
+        }
+    )
+    return {"authorizationUrl": f"https://app.clickup.com/api?{query}"}
+
+
+@router.get("/clickup/callback")
+async def clickup_callback(code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
+    try:
+        signed = decode_oauth_state(state, "clickup")
+    except OAuthStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        token_response = await client.post(
+            f"{settings.clickup_base_url}/oauth/token",
+            json={
+                "client_id": settings.clickup_client_id,
+                "client_secret": settings.clickup_client_secret,
+                "code": code,
+            },
+        )
+        token_payload = token_response.json()
+        access_token = str(token_payload.get("access_token") or "")
+        if not token_response.is_success or not access_token:
+            raise HTTPException(status_code=502, detail="ClickUp não concluiu a autorização.")
+        teams_response = await client.get(
+            f"{settings.clickup_base_url}/team",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    teams_payload = teams_response.json()
+    if not teams_response.is_success:
+        raise HTTPException(status_code=502, detail="ClickUp não informou os workspaces autorizados.")
+    teams = teams_payload.get("teams", [])
+    team_ids = [str(item.get("id") or "") for item in teams if item.get("id")]
+    team_names = [str(item.get("name") or "") for item in teams if item.get("name")]
+    external_id = ",".join(team_ids)[:255] or f"clickup-user-{signed['user_id']}"
+    account_name = team_names[0] if len(team_names) == 1 else f"{len(team_names)} workspaces"
+    await _upsert_connection(
+        user_id=int(signed["user_id"]),
+        organization_id=str(signed["organization_id"]),
+        provider="clickup",
+        label=f"ClickUp · {account_name}",
+        external_account_id=external_id,
+        external_account_name=account_name,
+        credentials={"access_token": access_token},
+        scopes=["authorized_workspaces"],
+        details={"workspaces": teams},
+    )
+    return RedirectResponse(
+        f"{settings.public_app_url.rstrip('/')}/connections?connected=clickup"
+    )
+
+
+@router.get("/trello/start")
+async def start_trello(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
+    _require_access(identity)
+    _require_provider("trello")
+    organization_id = str(identity.ark_session["organization"]["id"])
+    state_token = create_oauth_state("trello", identity.user.id, organization_id)
+    separator = "&" if "?" in settings.trello_redirect_uri else "?"
+    return_url = f"{settings.trello_redirect_uri}{separator}{urlencode({'state': state_token})}"
+    query = urlencode(
+        {
+            "expiration": "never",
+            "scope": "read,write",
+            "response_type": "token",
+            "key": settings.trello_api_key,
+            "callback_method": "fragment",
+            "return_url": return_url,
+            "name": "ArkLog",
+        }
+    )
+    return {"authorizationUrl": f"https://trello.com/1/authorize?{query}"}
+
+
+@router.post("/trello/callback")
+async def trello_callback(data: TrelloCallback) -> dict[str, str]:
+    try:
+        signed = decode_oauth_state(data.state, "trello")
+    except OAuthStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.get(
+            f"{settings.trello_api_base_url}/members/me",
+            params={
+                "key": settings.trello_api_key,
+                "token": data.token,
+                "fields": "id,username,fullName,url,avatarUrl",
+            },
+        )
+    payload = response.json()
+    if not response.is_success or not payload.get("id"):
+        raise HTTPException(status_code=502, detail="Trello não concluiu a autorização.")
+    account_name = str(payload.get("fullName") or payload.get("username") or "Trello")
+    await _upsert_connection(
+        user_id=int(signed["user_id"]),
+        organization_id=str(signed["organization_id"]),
+        provider="trello",
+        label=f"Trello · {account_name}",
+        external_account_id=str(payload["id"]),
+        external_account_name=account_name,
+        credentials={"user_token": data.token},
+        scopes=["read", "write"],
+        details={
+            "memberId": payload.get("id"),
+            "username": payload.get("username"),
+            "profileUrl": payload.get("url"),
+            "avatarUrl": payload.get("avatarUrl"),
+        },
+    )
+    return {"status": "connected", "provider": "trello"}
+
+
 @router.get("/{connection_id}/resources")
 async def resources(
     connection_id: int,
+    role: Literal["source", "destination"] = Query(default="source"),
     identity: ArkIdentity = Depends(get_identity),
 ) -> dict[str, Any]:
     _require_access(identity)
@@ -260,10 +476,10 @@ async def resources(
     if connection.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="Reconecte esta conta antes de usá-la.")
     try:
-        items = await list_connection_resources(connection)
+        items = await list_connection_resources(connection, role)
     except IntegrationRuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"provider": connection.provider, "resources": items}
+    return {"provider": connection.provider, "role": role, "resources": items}
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)

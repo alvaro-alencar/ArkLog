@@ -106,15 +106,43 @@ async def start_github(identity: ArkIdentity = Depends(get_identity)) -> dict[st
     }
 
 
-@router.get("/github/callback")
-async def github_callback(
-    code: str = Query(...),
+@router.get("/github/setup")
+async def github_setup(
+    installation_id: int = Query(..., gt=0),
     state: str = Query(...),
-    installation_id: int | None = Query(default=None, gt=0),
+    setup_action: str = Query(default="install"),
 ) -> RedirectResponse:
+    """Receive the installation ID, sign it, then request GitHub user authorization."""
+    if setup_action not in {"install", "update"}:
+        raise HTTPException(status_code=400, detail="Ação de instalação GitHub inválida.")
+    try:
+        initial = decode_oauth_state(state, "github")
+        authorization_state = create_oauth_state(
+            "github",
+            int(initial["user_id"]),
+            str(initial["organization_id"]),
+            extra={"installation_id": installation_id},
+        )
+    except OAuthStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    query = urlencode(
+        {
+            "client_id": settings.github_client_id,
+            "redirect_uri": settings.github_redirect_uri,
+            "state": authorization_state,
+        }
+    )
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
+
+
+@router.get("/github/callback")
+async def github_callback(code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
     """Verify the GitHub user and persist only the selected installation ID."""
     try:
         signed = decode_oauth_state(state, "github")
+        installation_id = int(signed.get("installation_id") or 0)
+        if installation_id <= 0:
+            raise OAuthStateError("GitHub installation is missing from the signed state.")
         user_token = await exchange_user_code(code)
         installation = await resolve_user_installation(user_token, installation_id)
     except OAuthStateError as exc:

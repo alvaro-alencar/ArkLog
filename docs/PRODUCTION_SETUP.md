@@ -36,10 +36,16 @@ General settings:
 
 - Homepage URL: `https://www.arksystem.net/arklog`
 - Callback URL: `https://www.arksystem.net/api/arklog/v1/connections/github/callback`
-- Setup URL: `https://www.arksystem.net/arklog/connections`
-- Request user authorization during installation: enabled
+- Setup URL: `https://www.arksystem.net/api/arklog/v1/connections/github/setup`
+- Request user authorization during installation: disabled
+- Redirect on update: enabled
 - Webhooks: disabled for the first release
 - Installation scope: any account that is allowed to use ArkLog
+
+ArkLog uses the setup URL to receive the selected installation ID. It signs that value,
+starts the GitHub user authorization flow, and then confirms through GitHub's API that the
+installation is actually accessible to the authorizing user. The raw query parameter is
+never trusted by itself.
 
 Repository permissions, all read-only:
 
@@ -59,6 +65,7 @@ GITHUB_APP_SLUG=<slug shown in the GitHub App URL>
 GITHUB_APP_PRIVATE_KEY=<complete PEM private key>
 GITHUB_CLIENT_ID=<GitHub App client ID>
 GITHUB_CLIENT_SECRET=<GitHub App client secret>
+GITHUB_SETUP_URI=https://www.arksystem.net/api/arklog/v1/connections/github/setup
 GITHUB_REDIRECT_URI=https://www.arksystem.net/api/arklog/v1/connections/github/callback
 ```
 

@@ -155,7 +155,7 @@ const Connections: React.FC = () => {
             <div className="flex items-start justify-between gap-4">
               <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white"><ProviderIcon provider={provider.id} size={24} /></div>
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${provider.configured ? 'bg-emerald-100 text-emerald-700' : provider.implemented ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
-                {provider.configured ? 'Disponível' : provider.implemented ? 'Configuração pendente' : 'No roadmap'}
+                {provider.configured ? 'Disponível' : provider.implemented ? 'Configuração pendente' : 'Em planejamento'}
               </span>
             </div>
             <p className="mt-5 text-xs font-bold uppercase tracking-[0.14em] text-violet-600">{provider.category}</p>

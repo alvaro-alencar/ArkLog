@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,11 +21,6 @@ class ArkIdentity:
     access: ArkLogAccessRecord
     ark_session: dict[str, Any]
     token: str
-
-
-def _synthetic_github_id(ark_user_id: str) -> int:
-    raw = hashlib.sha256(ark_user_id.encode("utf-8")).digest()[:8]
-    return int.from_bytes(raw, "big") & ((1 << 63) - 1)
 
 
 async def introspect_ark_session(token: str) -> dict[str, Any]:
@@ -77,7 +71,10 @@ async def resolve_identity(token: str) -> ArkIdentity:
 
             if user is None:
                 user = UserRecord(
-                    github_id=_synthetic_github_id(ark_user_id),
+                    # github_id belongs only to the retired GitHub-login model. Ark
+                    # identities are keyed by ark_user_id and must never be squeezed
+                    # into this legacy 32-bit database column.
+                    github_id=None,
                     username=email or f"ark-{ark_user_id[:12]}",
                     email=email or None,
                     avatar_url=None,

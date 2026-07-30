@@ -48,7 +48,14 @@ const Login: React.FC = () => {
         <section className="hidden lg:flex flex-col justify-between p-12 bg-slate-950 text-white relative overflow-hidden">
           <div className="absolute -right-24 -top-24 w-72 h-72 rounded-full bg-violet-600/30 blur-3xl" />
           <div className="relative">
-            <img src={`${import.meta.env.BASE_URL}logo_arklog.png`} alt="ArkLog" className="h-28 w-auto object-contain" />
+            <a href="https://www.arksystem.net" className="inline-flex items-center gap-4" aria-label="ArkSystem — página principal">
+              <img src={`${import.meta.env.BASE_URL}ark-system-logo.svg`} alt="ArkSystem" className="h-10 w-auto object-contain" />
+              <span className="h-9 w-px bg-white/20" aria-hidden="true" />
+              <span className="flex flex-col leading-none">
+                <strong className="text-2xl tracking-tight">ArkLog</strong>
+                <small className="mt-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Produto ArkSystem</small>
+              </span>
+            </a>
             <h1 className="text-4xl font-bold tracking-tight mt-10">Relatórios técnicos sem abrir a torneira dos seus créditos.</h1>
             <p className="text-slate-300 mt-5 text-lg leading-relaxed">
               A chave da IA permanece no servidor. Cada geração exige conta Ark, autorização do produto e cota disponível.
@@ -62,7 +69,11 @@ const Login: React.FC = () => {
 
         <main className="p-7 sm:p-10 lg:p-12">
           <div className="lg:hidden mb-7">
-            <img src={`${import.meta.env.BASE_URL}logo_arklog.png`} alt="ArkLog" className="h-20 w-auto" />
+            <a href="https://www.arksystem.net" className="inline-flex items-center gap-3" aria-label="ArkSystem — página principal">
+              <img src={`${import.meta.env.BASE_URL}ark-system-logo.svg`} alt="ArkSystem" className="h-8 w-auto object-contain" />
+              <span className="h-7 w-px bg-slate-200" aria-hidden="true" />
+              <strong className="text-xl tracking-tight">ArkLog</strong>
+            </a>
           </div>
           <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-8">
             <button type="button" onClick={() => setMode('login')} className={`px-5 py-2 rounded-lg text-sm font-semibold ${mode === 'login' ? 'bg-white shadow text-slate-950' : 'text-slate-500'}`}>Entrar</button>

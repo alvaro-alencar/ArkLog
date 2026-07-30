@@ -44,6 +44,13 @@ _DESTINATION_PUBLISHERS: dict[str, DestinationPublisher] = {
 }
 
 
+def _normalize_github_activity(
+    source_label: str, activity: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Compatibility shim for callers predating the provider adapter split."""
+    return github._normalize(source_label, activity)
+
+
 def _credentials(connection: IntegrationConnectionRecord) -> dict[str, Any]:
     values = decrypt_credentials(connection.encrypted_credentials)
     values["_scopes"] = list(connection.scopes or [])

@@ -37,6 +37,11 @@ def github_app(monkeypatch: pytest.MonkeyPatch) -> bytes:
     monkeypatch.setattr(settings, "github_client_secret", "test-secret")
     monkeypatch.setattr(
         settings,
+        "github_setup_uri",
+        "https://www.arksystem.net/api/arklog/v1/connections/github/setup",
+    )
+    monkeypatch.setattr(
+        settings,
         "github_redirect_uri",
         "https://www.arksystem.net/api/arklog/v1/connections/github/callback",
     )

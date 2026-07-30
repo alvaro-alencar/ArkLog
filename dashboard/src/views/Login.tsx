@@ -1,6 +1,7 @@
 import React, { FormEvent, useState } from 'react';
 import { Eye, EyeOff, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import ArkBrand from '../components/ArkBrand';
 import { ArkAuthenticationResult, useAuth } from '../contexts/AuthContext';
 
 type Mode = 'login' | 'register';
@@ -48,7 +49,7 @@ const Login: React.FC = () => {
         <section className="hidden lg:flex flex-col justify-between p-12 bg-slate-950 text-white relative overflow-hidden">
           <div className="absolute -right-24 -top-24 w-72 h-72 rounded-full bg-violet-600/30 blur-3xl" />
           <div className="relative">
-            <img src={`${import.meta.env.BASE_URL}logo_arklog.png`} alt="ArkLog" className="h-28 w-auto object-contain" />
+            <ArkBrand inverse />
             <h1 className="text-4xl font-bold tracking-tight mt-10">Relatórios técnicos sem abrir a torneira dos seus créditos.</h1>
             <p className="text-slate-300 mt-5 text-lg leading-relaxed">
               A chave da IA permanece no servidor. Cada geração exige conta Ark, autorização do produto e cota disponível.
@@ -61,9 +62,7 @@ const Login: React.FC = () => {
         </section>
 
         <main className="p-7 sm:p-10 lg:p-12">
-          <div className="lg:hidden mb-7">
-            <img src={`${import.meta.env.BASE_URL}logo_arklog.png`} alt="ArkLog" className="h-20 w-auto" />
-          </div>
+          <div className="lg:hidden mb-7"><ArkBrand /></div>
           <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-8">
             <button type="button" onClick={() => setMode('login')} className={`px-5 py-2 rounded-lg text-sm font-semibold ${mode === 'login' ? 'bg-white shadow text-slate-950' : 'text-slate-500'}`}>Entrar</button>
             <button type="button" onClick={() => setMode('register')} className={`px-5 py-2 rounded-lg text-sm font-semibold ${mode === 'register' ? 'bg-white shadow text-slate-950' : 'text-slate-500'}`}>Criar conta</button>

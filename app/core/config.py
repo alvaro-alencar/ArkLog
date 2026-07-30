@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "ArkLog"
-    app_version: str = "0.4.0"
+    app_version: str = "0.5.0"
     app_env: str = Field(default="development")
     debug: bool = Field(default=False)
     public_app_url: str = Field(default="http://localhost:5173")
@@ -64,11 +64,33 @@ class Settings(BaseSettings):
     )
     github_api_version: str = Field(default="2022-11-28")
 
-    # Slack OAuth application. The resulting bot token belongs to the connected workspace.
+    # Slack OAuth app. Existing workspaces must reconnect when source/history scopes change.
     slack_client_id: str = Field(default="")
     slack_client_secret: str = Field(default="")
     slack_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/connections/slack/callback"
+    )
+
+    # Notion public connection.
+    notion_client_id: str = Field(default="")
+    notion_client_secret: str = Field(default="")
+    notion_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/notion/callback"
+    )
+    notion_api_version: str = Field(default="2026-03-11")
+
+    # ClickUp OAuth app.
+    clickup_client_id: str = Field(default="")
+    clickup_client_secret: str = Field(default="")
+    clickup_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/clickup/callback"
+    )
+
+    # Trello Power-Up/API key. User tokens are returned to the browser fragment and
+    # immediately transferred to the encrypted ArkLog connection vault.
+    trello_api_key: str = Field(default="")
+    trello_redirect_uri: str = Field(
+        default="http://localhost:5173/trello/callback"
     )
 
     # Legacy webhook parsing remains available, but it has no owner access token.
@@ -92,12 +114,14 @@ class Settings(BaseSettings):
     # Provider base URLs contain no account credentials.
     github_api_base_url: str = "https://api.github.com"
     slack_api_base_url: str = "https://slack.com/api"
+    notion_api_base_url: str = "https://api.notion.com/v1"
+    clickup_base_url: str = "https://api.clickup.com/api/v2"
+    trello_api_base_url: str = "https://api.trello.com/1"
 
     # Inert legacy fields retained only so old modules/tests can import safely.
     # They are not documented, wired at startup, or used by the new flow engine.
     clickup_api_token: str = Field(default="")
     clickup_team_id: str = Field(default="")
-    clickup_base_url: str = "https://api.clickup.com/api/v2"
 
     projects_config_path: str = Field(default="projects.yaml")
 
@@ -151,6 +175,32 @@ class Settings(BaseSettings):
                 self.slack_redirect_uri,
             )
         )
+
+    @property
+    def notion_oauth_configured(self) -> bool:
+        return all(
+            item.strip()
+            for item in (
+                self.notion_client_id,
+                self.notion_client_secret,
+                self.notion_redirect_uri,
+            )
+        )
+
+    @property
+    def clickup_oauth_configured(self) -> bool:
+        return all(
+            item.strip()
+            for item in (
+                self.clickup_client_id,
+                self.clickup_client_secret,
+                self.clickup_redirect_uri,
+            )
+        )
+
+    @property
+    def trello_oauth_configured(self) -> bool:
+        return bool(self.trello_api_key.strip() and self.trello_redirect_uri.strip())
 
     @property
     def admin_email_set(self) -> set[str]:

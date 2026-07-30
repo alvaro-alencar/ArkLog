@@ -1,35 +1,133 @@
-"""Runtime adapters for provider-agnostic ArkLog flows."""
+"""Provider-agnostic runtime dispatcher for ArkLog flows."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
-import httpx
+from sqlalchemy import update
 
-from app.core.config import settings
-from app.integrations.github.app_auth import (
-    GitHubAppError,
-    create_installation_token,
-    list_installation_repositories,
-)
+from app.integrations.catalog import provider_definition
+from app.integrations.providers import clickup, github, notion, slack, trello
+from app.integrations.providers.common import ProviderRuntimeError
+from app.models.database import AsyncSessionLocal
 from app.models.tables import IntegrationConnectionRecord
-from app.security.credentials import decrypt_credentials
+from app.security.credentials import decrypt_credentials, encrypt_credentials
+
+IntegrationRuntimeError = ProviderRuntimeError
+
+ResourceLister = Callable[[dict[str, Any], str], Awaitable[list[dict[str, Any]]]]
+SourceCollector = Callable[..., Awaitable[dict[str, Any]]]
+DestinationPublisher = Callable[..., Awaitable[dict[str, Any]]]
+
+_RESOURCE_LISTERS: dict[str, ResourceLister] = {
+    "github": github.list_resources,
+    "slack": slack.list_resources,
+    "notion": notion.list_resources,
+    "clickup": clickup.list_resources,
+    "trello": trello.list_resources,
+}
+
+_SOURCE_COLLECTORS: dict[str, SourceCollector] = {
+    "github": github.collect,
+    "slack": slack.collect,
+    "notion": notion.collect,
+    "clickup": clickup.collect,
+    "trello": trello.collect,
+}
+
+_DESTINATION_PUBLISHERS: dict[str, DestinationPublisher] = {
+    "slack": slack.publish,
+    "notion": notion.publish,
+    "clickup": clickup.publish,
+    "trello": trello.publish,
+}
 
 
-class IntegrationRuntimeError(RuntimeError):
-    """Safe provider failure that can be shown without leaking credentials."""
+def _normalize_github_activity(
+    source_label: str, activity: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Compatibility shim for callers predating the provider adapter split."""
+    return github._normalize(source_label, activity)
+
+
+def _credentials(connection: IntegrationConnectionRecord) -> dict[str, Any]:
+    values = decrypt_credentials(connection.encrypted_credentials)
+    values["_scopes"] = list(connection.scopes or [])
+    return values
+
+
+async def _persist_if_changed(
+    connection: IntegrationConnectionRecord, credentials: dict[str, Any]
+) -> None:
+    if not credentials.pop("_dirty", False):
+        return
+    clean = {
+        key: value
+        for key, value in credentials.items()
+        if not key.startswith("_")
+    }
+    encrypted = encrypt_credentials(clean)
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            update(IntegrationConnectionRecord)
+            .where(IntegrationConnectionRecord.id == connection.id)
+            .values(encrypted_credentials=encrypted)
+        )
 
 
 async def list_connection_resources(
     connection: IntegrationConnectionRecord,
+    role: str = "source",
 ) -> list[dict[str, Any]]:
-    credentials = decrypt_credentials(connection.encrypted_credentials)
-    if connection.provider == "github":
-        return await _github_repositories(credentials)
-    if connection.provider == "slack":
-        return await _slack_channels(credentials)
-    raise IntegrationRuntimeError(f"Provider {connection.provider} is not supported yet.")
+    try:
+        definition = provider_definition(connection.provider)
+    except ValueError as exc:
+        raise ProviderRuntimeError(str(exc)) from exc
+    if role not in {"source", "destination"}:
+        raise ProviderRuntimeError("A função da conexão é inválida.")
+    if not definition.supports(role):
+        return []
+    lister = _RESOURCE_LISTERS.get(connection.provider)
+    if lister is None:
+        raise ProviderRuntimeError(
+            f"{definition.name} ainda não possui seletor de recursos."
+        )
+    credentials = _credentials(connection)
+    try:
+        resources = await lister(credentials, role)
+    finally:
+        await _persist_if_changed(connection, credentials)
+    return [item for item in resources if item.get("id")]
+
+
+async def validate_connection_resource(
+    connection: IntegrationConnectionRecord,
+    role: str,
+    resource_id: str,
+) -> dict[str, Any]:
+    normalized = resource_id.strip()
+    if not normalized:
+        raise ProviderRuntimeError("Escolha um recurso para esta conexão.")
+    resources = await list_connection_resources(connection, role)
+    selected = next(
+        (
+            item
+            for item in resources
+            if str(item.get("id") or "").casefold() == normalized.casefold()
+        ),
+        None,
+    )
+    if selected is None:
+        raise ProviderRuntimeError(
+            "O recurso escolhido não está mais disponível nesta conexão."
+        )
+    if not selected.get("available", True):
+        reason = str(selected.get("availabilityReason") or "").strip()
+        raise ProviderRuntimeError(
+            reason or "O recurso escolhido ainda não está pronto para uso."
+        )
+    return selected
 
 
 async def collect_source(
@@ -39,64 +137,30 @@ async def collect_source(
     since: datetime | None,
     trial_limits: bool,
 ) -> dict[str, Any]:
-    """Collect a provider payload and attach a provider-neutral event envelope."""
-    if connection.provider != "github":
-        raise IntegrationRuntimeError(
-            f"Provider {connection.provider} is not available as a source yet."
-        )
-    repo_full_name = str(config.get("repository") or "").strip()
-    if "/" not in repo_full_name:
-        raise IntegrationRuntimeError("Choose a GitHub repository for the source.")
-
-    credentials = decrypt_credentials(connection.encrypted_credentials)
     try:
-        installation_id = int(credentials.get("installation_id") or 0)
-    except (TypeError, ValueError) as exc:
-        raise IntegrationRuntimeError("Reinstall the GitHub App before running this flow.") from exc
-    if installation_id <= 0:
-        raise IntegrationRuntimeError("Reinstall the GitHub App before running this flow.")
-
+        definition = provider_definition(connection.provider)
+    except ValueError as exc:
+        raise ProviderRuntimeError(str(exc)) from exc
+    if not definition.supports("source"):
+        raise ProviderRuntimeError(
+            f"{definition.name} não está disponível como fonte."
+        )
+    collector = _SOURCE_COLLECTORS.get(connection.provider)
+    if collector is None:
+        raise ProviderRuntimeError(
+            f"A leitura de {definition.name} ainda não foi implementada."
+        )
+    credentials = _credentials(connection)
     try:
-        selected_repositories = await list_installation_repositories(installation_id)
-        selected = next(
-            (
-                item
-                for item in selected_repositories
-                if str(item.get("full_name") or "").casefold() == repo_full_name.casefold()
-            ),
-            None,
+        result = await collector(
+            credentials,
+            config,
+            since=since,
+            trial_limits=trial_limits,
         )
-        if selected is None:
-            raise IntegrationRuntimeError(
-                "This repository is no longer selected in the GitHub App installation."
-            )
-        repository_id = int(selected.get("id") or 0)
-        if repository_id <= 0:
-            raise IntegrationRuntimeError("GitHub returned an invalid repository selection.")
-        token = await create_installation_token(
-            installation_id,
-            repository_id=repository_id,
-        )
-    except GitHubAppError as exc:
-        raise IntegrationRuntimeError(str(exc)) from exc
-
-    owner, repo = repo_full_name.split("/", 1)
-    from app.integrations.github.api_client import fetch_github_activity
-
-    activity = await fetch_github_activity(
-        owner,
-        repo,
-        since=since,
-        token=token,
-        use_global_token=False,
-        trial_limits=trial_limits,
-    )
-    return {
-        **activity,
-        "source_provider": "github",
-        "source_label": repo_full_name,
-        "normalized_events": _normalize_github_activity(repo_full_name, activity),
-    }
+    finally:
+        await _persist_if_changed(connection, credentials)
+    return result
 
 
 async def publish_destination(
@@ -104,186 +168,31 @@ async def publish_destination(
     config: dict[str, Any],
     content: str,
     *,
+    title: str,
     idempotency_key: str,
 ) -> dict[str, Any]:
-    """Publish with a stable provider-side message ID when the destination supports it."""
-    if connection.provider != "slack":
-        raise IntegrationRuntimeError(
-            f"Provider {connection.provider} is not available as a destination yet."
-        )
-    channel_id = str(config.get("channel") or "").strip()
-    if not channel_id:
-        raise IntegrationRuntimeError("Choose a Slack channel for the destination.")
-    credentials = decrypt_credentials(connection.encrypted_credentials)
-    token = str(credentials.get("bot_token") or "")
-    if not token:
-        raise IntegrationRuntimeError("Reconnect Slack before running this flow.")
-
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        response = await client.post(
-            f"{settings.slack_api_base_url}/chat.postMessage",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            json={
-                "channel": channel_id,
-                "text": content[:39000],
-                "client_msg_id": idempotency_key[:36],
-                "unfurl_links": False,
-                "unfurl_media": False,
-            },
-        )
-    payload = response.json()
-    if not response.is_success or not payload.get("ok"):
-        error = str(payload.get("error") or response.status_code)
-        raise IntegrationRuntimeError(f"Slack rejected the publication: {error}.")
-    return {
-        "external_id": str(payload.get("ts") or ""),
-        "target_id": channel_id,
-        "provider": "slack",
-    }
-
-
-def _normalize_github_activity(
-    source_label: str,
-    activity: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Turn GitHub-specific objects into the stable contract consumed by the LLM."""
-    events: list[dict[str, Any]] = []
-    for item in activity.get("commits", []):
-        events.append(
-            {
-                "type": "change",
-                "source": "github",
-                "container": source_label,
-                "title": item.get("subject", ""),
-                "description": item.get("body", ""),
-                "actor": item.get("author", ""),
-                "status": "completed",
-                "occurred_at": item.get("committed_at", ""),
-                "reference": item.get("short_sha", ""),
-            }
-        )
-    for item in activity.get("pull_requests", []):
-        events.append(
-            {
-                "type": "review",
-                "source": "github",
-                "container": source_label,
-                "title": item.get("title", ""),
-                "description": item.get("body", ""),
-                "actor": item.get("author", ""),
-                "status": item.get("state", ""),
-                "occurred_at": item.get("merged_at")
-                or item.get("closed_at")
-                or item.get("created_at", ""),
-                "reference": f"PR #{item.get('number')}",
-                "labels": item.get("labels", []),
-            }
-        )
-    for item in activity.get("issues", []):
-        events.append(
-            {
-                "type": "work_item",
-                "source": "github",
-                "container": source_label,
-                "title": item.get("title", ""),
-                "description": item.get("body", ""),
-                "actor": item.get("author", ""),
-                "status": item.get("state", ""),
-                "occurred_at": item.get("closed_at") or item.get("created_at", ""),
-                "reference": f"Issue #{item.get('number')}",
-                "labels": item.get("labels", []),
-            }
-        )
-    for item in activity.get("workflow_runs", []):
-        events.append(
-            {
-                "type": "automation",
-                "source": "github",
-                "container": source_label,
-                "title": item.get("name", ""),
-                "description": item.get("commit_subject", ""),
-                "actor": "",
-                "status": item.get("conclusion") or item.get("status", ""),
-                "occurred_at": item.get("created_at", ""),
-                "reference": item.get("branch", ""),
-            }
-        )
-    for item in activity.get("releases", []):
-        events.append(
-            {
-                "type": "release",
-                "source": "github",
-                "container": source_label,
-                "title": item.get("name", ""),
-                "description": item.get("body", ""),
-                "actor": item.get("author", ""),
-                "status": "prerelease" if item.get("prerelease") else "published",
-                "occurred_at": item.get("published_at", ""),
-                "reference": item.get("tag", ""),
-            }
-        )
-    return events
-
-
-async def _github_repositories(credentials: dict[str, Any]) -> list[dict[str, Any]]:
     try:
-        installation_id = int(credentials.get("installation_id") or 0)
-    except (TypeError, ValueError) as exc:
-        raise IntegrationRuntimeError("Reinstall the GitHub App to select repositories.") from exc
-    if installation_id <= 0:
-        raise IntegrationRuntimeError("Reinstall the GitHub App to select repositories.")
+        definition = provider_definition(connection.provider)
+    except ValueError as exc:
+        raise ProviderRuntimeError(str(exc)) from exc
+    if not definition.supports("destination"):
+        raise ProviderRuntimeError(
+            f"{definition.name} não está disponível como destino."
+        )
+    publisher = _DESTINATION_PUBLISHERS.get(connection.provider)
+    if publisher is None:
+        raise ProviderRuntimeError(
+            f"A publicação em {definition.name} ainda não foi implementada."
+        )
+    credentials = _credentials(connection)
     try:
-        items = await list_installation_repositories(installation_id)
-    except GitHubAppError as exc:
-        raise IntegrationRuntimeError(str(exc)) from exc
-    return [
-        {
-            "id": str(repo.get("id")),
-            "name": repo.get("full_name"),
-            "label": repo.get("full_name"),
-            "private": bool(repo.get("private")),
-            "url": repo.get("html_url"),
-        }
-        for repo in items
-        if repo.get("id") and repo.get("full_name")
-    ]
-
-
-async def _slack_channels(credentials: dict[str, Any]) -> list[dict[str, Any]]:
-    token = str(credentials.get("bot_token") or "")
-    if not token:
-        raise IntegrationRuntimeError("Slack connection has no active bot token.")
-    resources: list[dict[str, Any]] = []
-    cursor = ""
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        for _ in range(5):
-            response = await client.get(
-                f"{settings.slack_api_base_url}/conversations.list",
-                headers={"Authorization": f"Bearer {token}"},
-                params={
-                    "limit": 200,
-                    "types": "public_channel,private_channel",
-                    "exclude_archived": "true",
-                    "cursor": cursor,
-                },
-            )
-            payload = response.json()
-            if not response.is_success or not payload.get("ok"):
-                error = str(payload.get("error") or response.status_code)
-                raise IntegrationRuntimeError(f"Slack channel listing failed: {error}.")
-            for channel in payload.get("channels", []):
-                resources.append(
-                    {
-                        "id": str(channel.get("id")),
-                        "name": channel.get("name"),
-                        "label": f"#{channel.get('name')}",
-                        "private": bool(channel.get("is_private")),
-                    }
-                )
-            cursor = str(payload.get("response_metadata", {}).get("next_cursor") or "")
-            if not cursor:
-                break
-    return resources
+        result = await publisher(
+            credentials,
+            config,
+            title=title,
+            content=content,
+            idempotency_key=idempotency_key,
+        )
+    finally:
+        await _persist_if_changed(connection, credentials)
+    return result

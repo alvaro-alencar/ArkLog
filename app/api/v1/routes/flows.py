@@ -13,10 +13,12 @@ from sqlalchemy.orm import selectinload
 from app.ai.report_generator import ReportGenerator
 from app.api.v1.deps import get_identity
 from app.core.config import settings
+from app.integrations.catalog import provider_definition
 from app.integrations.runtime import (
     IntegrationRuntimeError,
     collect_source,
     publish_destination,
+    validate_connection_resource,
 )
 from app.models.database import AsyncSessionLocal
 from app.models.tables import (
@@ -37,8 +39,17 @@ class FlowCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     source_connection_id: int
     destination_connection_id: int
-    repository: str = Field(min_length=3, max_length=255)
-    channel: str = Field(min_length=1, max_length=255)
+    source_resource_id: str = Field(default="", max_length=255)
+    source_resource_label: str = Field(default="", max_length=500)
+    source_resource_type: str = Field(default="", max_length=80)
+    destination_resource_id: str = Field(default="", max_length=255)
+    destination_resource_label: str = Field(default="", max_length=500)
+    destination_resource_type: str = Field(default="", max_length=80)
+    source_options: dict[str, Any] = Field(default_factory=dict)
+    destination_options: dict[str, Any] = Field(default_factory=dict)
+    # Compatibility with clients and rows created before the generic builder.
+    repository: str = Field(default="", max_length=255)
+    channel: str = Field(default="", max_length=255)
     channel_label: str = Field(default="", max_length=255)
     report_style: Literal["executivo", "tecnico", "misto"] = "misto"
     instructions: str = Field(default="", max_length=4000)
@@ -54,7 +65,38 @@ def _require_access(identity: ArkIdentity) -> None:
         raise HTTPException(status_code=403, detail="Acesso ao ArkLog não autorizado.")
 
 
+def _normalized_config(
+    config: dict[str, Any], provider: str, role: str
+) -> dict[str, Any]:
+    resource_id = str(config.get("resourceId") or "").strip()
+    resource_label = str(config.get("resourceLabel") or "").strip()
+    resource_type = str(config.get("resourceType") or "").strip()
+    options = config.get("options") if isinstance(config.get("options"), dict) else {}
+
+    if not resource_id and provider == "github" and role == "source":
+        resource_id = str(config.get("repository") or "").strip()
+        resource_label = resource_label or resource_id
+        resource_type = resource_type or "repository"
+    if not resource_id and provider == "slack":
+        resource_id = str(config.get("channel") or "").strip()
+        resource_label = resource_label or str(config.get("channelLabel") or resource_id)
+        resource_type = resource_type or "channel"
+
+    return {
+        "resourceId": resource_id,
+        "resourceLabel": resource_label or resource_id,
+        "resourceType": resource_type or "resource",
+        "options": options,
+    }
+
+
 def _serialize(flow: AutomationFlowRecord) -> dict[str, Any]:
+    source_config = _normalized_config(
+        flow.source_config, flow.source_connection.provider, "source"
+    )
+    destination_config = _normalized_config(
+        flow.destination_config, flow.destination_connection.provider, "destination"
+    )
     return {
         "id": flow.id,
         "name": flow.name,
@@ -65,8 +107,8 @@ def _serialize(flow: AutomationFlowRecord) -> dict[str, Any]:
         "sourceLabel": flow.source_connection.label,
         "destinationProvider": flow.destination_connection.provider,
         "destinationLabel": flow.destination_connection.label,
-        "sourceConfig": flow.source_config,
-        "destinationConfig": flow.destination_config,
+        "sourceConfig": source_config,
+        "destinationConfig": destination_config,
         "reportConfig": flow.report_config,
         "createdAt": flow.created_at.isoformat(),
         "updatedAt": flow.updated_at.isoformat(),
@@ -93,22 +135,51 @@ async def _flow_query(flow_id: int, identity: ArkIdentity) -> AutomationFlowReco
     return flow
 
 
+async def _owned_connections(
+    source_id: int,
+    destination_id: int,
+    identity: ArkIdentity,
+) -> tuple[IntegrationConnectionRecord, IntegrationConnectionRecord]:
+    organization_id = str(identity.ark_session["organization"]["id"])
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(IntegrationConnectionRecord).where(
+                IntegrationConnectionRecord.id.in_([source_id, destination_id]),
+                IntegrationConnectionRecord.user_id == identity.user.id,
+                IntegrationConnectionRecord.organization_id == organization_id,
+                IntegrationConnectionRecord.status == "ACTIVE",
+            )
+        )
+        connections = {item.id: item for item in result.scalars().all()}
+    source = connections.get(source_id)
+    destination = connections.get(destination_id)
+    if source is None or destination is None:
+        raise HTTPException(
+            status_code=400,
+            detail="As duas conexões precisam estar ativas e pertencer à sua conta Ark.",
+        )
+    return source, destination
+
+
 async def _create_pending_report(
     *,
     flow: AutomationFlowRecord,
     content: str,
     summary: str,
-    commit_count: int,
+    item_count: int,
 ) -> tuple[int, int]:
     """Persist the generated artifact before any external side effect."""
-    target_id = str(flow.destination_config.get("channel") or "")
+    destination = _normalized_config(
+        flow.destination_config, flow.destination_connection.provider, "destination"
+    )
+    target_id = str(destination.get("resourceId") or "")
     async with AsyncSessionLocal() as session, session.begin():
         report = ReportRecord(
             trigger="manual_flow",
             status="publication_pending",
             content=content,
             summary=summary,
-            commit_count=commit_count,
+            commit_count=item_count,
             flow_id=flow.id,
             project_id=None,
         )
@@ -200,9 +271,13 @@ async def create_flow(
 ) -> dict[str, Any]:
     _require_access(identity)
     organization_id = str(identity.ark_session["organization"]["id"])
-    repository = data.repository.strip()
-    if repository.count("/") != 1:
-        raise HTTPException(status_code=400, detail="Escolha um repositório GitHub válido.")
+    source_resource_id = (data.source_resource_id or data.repository).strip()
+    destination_resource_id = (data.destination_resource_id or data.channel).strip()
+    if not source_resource_id or not destination_resource_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Escolha um recurso para a fonte e outro para o destino.",
+        )
     if (
         identity.access.status == "TRIAL"
         and data.window_hours > settings.arklog_trial_max_window_hours
@@ -212,75 +287,116 @@ async def create_flow(
             detail="O teste gratuito cobre no máximo sete dias por relatório.",
         )
 
+    source, destination = await _owned_connections(
+        data.source_connection_id,
+        data.destination_connection_id,
+        identity,
+    )
+    source_definition = provider_definition(source.provider)
+    destination_definition = provider_definition(destination.provider)
+    if not source_definition.supports("source"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source_definition.name} não pode ser usado como fonte.",
+        )
+    if not destination_definition.supports("destination"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{destination_definition.name} não pode ser usado como destino.",
+        )
+
+    try:
+        # Provider requests happen outside the database transaction.
+        source_resource = await validate_connection_resource(
+            source, "source", source_resource_id
+        )
+        destination_resource = await validate_connection_resource(
+            destination, "destination", destination_resource_id
+        )
+    except IntegrationRuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    source_config = {
+        "resourceId": str(source_resource["id"]),
+        "resourceLabel": str(
+            source_resource.get("label")
+            or data.source_resource_label
+            or source_resource["id"]
+        ),
+        "resourceType": str(
+            source_resource.get("type") or data.source_resource_type or "resource"
+        ),
+        "options": data.source_options,
+    }
+    destination_config = {
+        "resourceId": str(destination_resource["id"]),
+        "resourceLabel": str(
+            destination_resource.get("label")
+            or data.destination_resource_label
+            or data.channel_label
+            or destination_resource["id"]
+        ),
+        "resourceType": str(
+            destination_resource.get("type")
+            or data.destination_resource_type
+            or "resource"
+        ),
+        "options": data.destination_options,
+    }
+
+    async with AsyncSessionLocal() as session, session.begin():
+        # Recheck ownership and status atomically before writing the flow.
+        result = await session.execute(
+            select(IntegrationConnectionRecord).where(
+                IntegrationConnectionRecord.id.in_(
+                    [data.source_connection_id, data.destination_connection_id]
+                ),
+                IntegrationConnectionRecord.user_id == identity.user.id,
+                IntegrationConnectionRecord.organization_id == organization_id,
+                IntegrationConnectionRecord.status == "ACTIVE",
+            )
+        )
+        connection_ids = {item.id for item in result.scalars().all()}
+        if connection_ids != {
+            data.source_connection_id,
+            data.destination_connection_id,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Uma das conexões mudou durante a criação. Atualize e tente novamente.",
+            )
+        collision = await session.scalar(
+            select(AutomationFlowRecord).where(
+                AutomationFlowRecord.user_id == identity.user.id,
+                AutomationFlowRecord.organization_id == organization_id,
+                AutomationFlowRecord.name == data.name.strip(),
+                AutomationFlowRecord.status != "ARCHIVED",
+            )
+        )
+        if collision is not None:
+            raise HTTPException(status_code=409, detail="Já existe um fluxo com este nome.")
+
+        flow = AutomationFlowRecord(
+            user_id=identity.user.id,
+            organization_id=organization_id,
+            name=data.name.strip(),
+            source_connection_id=data.source_connection_id,
+            destination_connection_id=data.destination_connection_id,
+            source_config=source_config,
+            destination_config=destination_config,
+            report_config={
+                "style": data.report_style,
+                "instructions": data.instructions.strip(),
+                "windowHours": data.window_hours,
+            },
+            status="ACTIVE",
+        )
+        session.add(flow)
+        await session.flush()
+        flow_id = flow.id
+
     async with AsyncSessionLocal() as session:
-        async with session.begin():
-            connections_result = await session.execute(
-                select(IntegrationConnectionRecord).where(
-                    IntegrationConnectionRecord.id.in_(
-                        [data.source_connection_id, data.destination_connection_id]
-                    ),
-                    IntegrationConnectionRecord.user_id == identity.user.id,
-                    IntegrationConnectionRecord.organization_id == organization_id,
-                    IntegrationConnectionRecord.status == "ACTIVE",
-                )
-            )
-            connections = {
-                item.id: item for item in connections_result.scalars().all()
-            }
-            source = connections.get(data.source_connection_id)
-            destination = connections.get(data.destination_connection_id)
-            if source is None or destination is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="As duas conexões precisam pertencer à sua conta Ark.",
-                )
-            if source.provider != "github":
-                raise HTTPException(
-                    status_code=400,
-                    detail="A primeira fonte disponível é o GitHub.",
-                )
-            if destination.provider != "slack":
-                raise HTTPException(
-                    status_code=400,
-                    detail="O primeiro destino disponível é o Slack.",
-                )
-
-            collision = await session.scalar(
-                select(AutomationFlowRecord).where(
-                    AutomationFlowRecord.user_id == identity.user.id,
-                    AutomationFlowRecord.name == data.name.strip(),
-                    AutomationFlowRecord.status != "ARCHIVED",
-                )
-            )
-            if collision is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Já existe um fluxo com este nome.",
-                )
-
-            flow = AutomationFlowRecord(
-                user_id=identity.user.id,
-                organization_id=organization_id,
-                name=data.name.strip(),
-                source_connection_id=source.id,
-                destination_connection_id=destination.id,
-                source_config={"repository": repository},
-                destination_config={
-                    "channel": data.channel.strip(),
-                    "channelLabel": data.channel_label.strip(),
-                },
-                report_config={
-                    "style": data.report_style,
-                    "instructions": data.instructions.strip(),
-                    "windowHours": data.window_hours,
-                },
-                status="ACTIVE",
-            )
-            session.add(flow)
-            await session.flush()
-            flow_id = flow.id
-
-        flow = await session.scalar(
+        created = await session.scalar(
             select(AutomationFlowRecord)
             .where(AutomationFlowRecord.id == flow_id)
             .options(
@@ -288,8 +404,9 @@ async def create_flow(
                 selectinload(AutomationFlowRecord.destination_connection),
             )
         )
-    assert flow is not None
-    return {"flow": _serialize(flow)}
+    if created is None:
+        raise HTTPException(status_code=500, detail="O fluxo não pôde ser carregado após a criação.")
+    return {"flow": _serialize(created)}
 
 
 @router.get("/{flow_id}")
@@ -367,43 +484,62 @@ async def execute_flow(
     publication_id: int | None = None
     publication: dict[str, Any] | None = None
     try:
+        source_config = _normalized_config(
+            flow.source_config, flow.source_connection.provider, "source"
+        )
+        destination_config = _normalized_config(
+            flow.destination_config,
+            flow.destination_connection.provider,
+            "destination",
+        )
+        await validate_connection_resource(
+            flow.source_connection, "source", str(source_config["resourceId"])
+        )
+        await validate_connection_resource(
+            flow.destination_connection,
+            "destination",
+            str(destination_config["resourceId"]),
+        )
         activity = await collect_source(
             flow.source_connection,
-            flow.source_config,
+            source_config,
             since=since,
             trial_limits=identity.access.status == "TRIAL",
         )
-        repository = str(flow.source_config.get("repository") or "")
         instructions = str(flow.report_config.get("instructions") or "")
+        event_count = int(
+            activity.get("raw_item_count")
+            or len(activity.get("normalized_events", []))
+        )
         payload = {
             "project_name": flow.name,
-            "description": f"Fluxo ArkLog alimentado por {repository}.",
+            "description": (
+                f"Fluxo ArkLog: {flow.source_connection.provider} → "
+                f"{flow.destination_connection.provider}."
+            ),
             "tech_stack": [],
             "business_context": instructions,
             "report_style": flow.report_config.get("style", "misto"),
             "trigger": "manual_flow",
             "access_status": identity.access.status,
             **activity,
-            "commit_count": len(activity.get("commits", [])),
+            "commit_count": event_count,
         }
         content, summary = await ReportGenerator().generate(payload)
         report_id, publication_id = await _create_pending_report(
             flow=flow,
             content=content,
             summary=summary,
-            commit_count=len(activity.get("commits", [])),
+            item_count=event_count,
         )
         publication = await publish_destination(
             flow.destination_connection,
-            flow.destination_config,
+            destination_config,
             content,
+            title=flow.name,
             idempotency_key=usage.id,
         )
-        await _mark_publication_success(
-            report_id,
-            publication_id,
-            publication,
-        )
+        await _mark_publication_success(report_id, publication_id, publication)
         await complete_usage(usage.id, report_id)
     except IntegrationRuntimeError as exc:
         await _mark_publication_failed(report_id, publication_id, str(exc))

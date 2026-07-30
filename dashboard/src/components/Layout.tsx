@@ -3,6 +3,7 @@ import { FileText, FolderGit2, LogOut, Plug, Settings, ShieldCheck, User, Workfl
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
+import ArkBrand from './ArkBrand';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, access, logout } = useAuth();
@@ -29,7 +30,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     <div className="min-h-screen bg-[#f5f7fb] text-slate-950 lg:flex">
       <aside className="lg:w-64 lg:fixed lg:inset-y-0 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 z-20">
         <div className="px-5 py-4 flex lg:block items-center justify-between">
-          <a href="https://www.arksystem.net" aria-label="ArkSystem"><img src={`${import.meta.env.BASE_URL}logo_arklog.png`} alt="ArkLog" className="h-14 lg:h-20 w-auto object-contain" /></a>
+          <a href="https://www.arksystem.net" aria-label="ArkSystem"><ArkBrand compact /></a>
           <div className="lg:hidden text-xs font-semibold rounded-full bg-violet-100 text-violet-700 px-3 py-1">{access?.status}</div>
         </div>
         <nav className="px-3 pb-3 lg:pb-0 flex lg:block overflow-x-auto gap-1 lg:space-y-1">

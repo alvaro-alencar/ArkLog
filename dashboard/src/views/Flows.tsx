@@ -1,19 +1,27 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ArrowRight, GitBranch, MessageSquare, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowRight, Info, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import ProviderIcon from '../components/ProviderIcon';
 import api from '../lib/api';
+
+type Role = 'source' | 'destination';
 
 type Connection = {
   id: number;
-  provider: 'github' | 'slack';
+  provider: string;
   label: string;
   status: string;
+  capabilities: Role[];
 };
 
 type Resource = {
   id: string;
   name: string;
   label: string;
+  type?: string;
   private?: boolean;
+  available?: boolean;
+  availabilityReason?: string;
+  metadata?: Record<string, unknown>;
 };
 
 type Flow = {
@@ -26,8 +34,8 @@ type Flow = {
   sourceLabel: string;
   destinationProvider: string;
   destinationLabel: string;
-  sourceConfig: { repository?: string };
-  destinationConfig: { channel?: string; channelLabel?: string };
+  sourceConfig: { resourceId?: string; resourceLabel?: string; resourceType?: string };
+  destinationConfig: { resourceId?: string; resourceLabel?: string; resourceType?: string };
   reportConfig: { style?: string; instructions?: string; windowHours?: number };
 };
 
@@ -35,9 +43,12 @@ const emptyForm = {
   name: '',
   sourceConnectionId: '',
   destinationConnectionId: '',
-  repository: '',
-  channel: '',
-  channelLabel: '',
+  sourceResourceId: '',
+  sourceResourceLabel: '',
+  sourceResourceType: '',
+  destinationResourceId: '',
+  destinationResourceLabel: '',
+  destinationResourceType: '',
   reportStyle: 'misto',
   instructions: '',
   windowHours: '168',
@@ -46,8 +57,8 @@ const emptyForm = {
 const Flows: React.FC = () => {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
-  const [repositories, setRepositories] = useState<Resource[]>([]);
-  const [channels, setChannels] = useState<Resource[]>([]);
+  const [sourceResources, setSourceResources] = useState<Resource[]>([]);
+  const [destinationResources, setDestinationResources] = useState<Resource[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [showBuilder, setShowBuilder] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -55,8 +66,16 @@ const Flows: React.FC = () => {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const githubConnections = useMemo(() => connections.filter((item) => item.provider === 'github'), [connections]);
-  const slackConnections = useMemo(() => connections.filter((item) => item.provider === 'slack'), [connections]);
+  const sourceConnections = useMemo(
+    () => connections.filter((item) => item.capabilities?.includes('source')),
+    [connections],
+  );
+  const destinationConnections = useMemo(
+    () => connections.filter((item) => item.capabilities?.includes('destination')),
+    [connections],
+  );
+  const selectedSource = sourceConnections.find((item) => String(item.id) === form.sourceConnectionId);
+  const selectedDestination = destinationConnections.find((item) => String(item.id) === form.destinationConnectionId);
 
   const load = async () => {
     setLoading(true);
@@ -77,14 +96,14 @@ const Flows: React.FC = () => {
 
   useEffect(() => { void load(); }, []);
 
-  const loadResources = async (connectionId: string, kind: 'source' | 'destination') => {
+  const loadResources = async (connectionId: string, role: Role) => {
     if (!connectionId) return;
-    setBusy(`${kind}-resources`);
+    setBusy(`${role}-resources`);
     setError('');
     try {
-      const response = await api.get(`/connections/${connectionId}/resources`);
-      if (kind === 'source') setRepositories(response.data.resources || []);
-      else setChannels(response.data.resources || []);
+      const response = await api.get(`/connections/${connectionId}/resources`, { params: { role } });
+      if (role === 'source') setSourceResources(response.data.resources || []);
+      else setDestinationResources(response.data.resources || []);
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'Não foi possível carregar os recursos desta conexão.');
     } finally {
@@ -92,16 +111,35 @@ const Flows: React.FC = () => {
     }
   };
 
-  const changeSource = (value: string) => {
-    setForm((current) => ({ ...current, sourceConnectionId: value, repository: '' }));
-    setRepositories([]);
-    void loadResources(value, 'source');
+  const changeConnection = (value: string, role: Role) => {
+    if (role === 'source') {
+      setForm((current) => ({ ...current, sourceConnectionId: value, sourceResourceId: '', sourceResourceLabel: '', sourceResourceType: '' }));
+      setSourceResources([]);
+    } else {
+      setForm((current) => ({ ...current, destinationConnectionId: value, destinationResourceId: '', destinationResourceLabel: '', destinationResourceType: '' }));
+      setDestinationResources([]);
+    }
+    void loadResources(value, role);
   };
 
-  const changeDestination = (value: string) => {
-    setForm((current) => ({ ...current, destinationConnectionId: value, channel: '', channelLabel: '' }));
-    setChannels([]);
-    void loadResources(value, 'destination');
+  const chooseResource = (resourceId: string, role: Role) => {
+    const resources = role === 'source' ? sourceResources : destinationResources;
+    const selected = resources.find((resource) => resource.id === resourceId);
+    if (role === 'source') {
+      setForm((current) => ({
+        ...current,
+        sourceResourceId: resourceId,
+        sourceResourceLabel: selected?.label || '',
+        sourceResourceType: selected?.type || '',
+      }));
+    } else {
+      setForm((current) => ({
+        ...current,
+        destinationResourceId: resourceId,
+        destinationResourceLabel: selected?.label || '',
+        destinationResourceType: selected?.type || '',
+      }));
+    }
   };
 
   const submit = async (event: FormEvent) => {
@@ -114,18 +152,21 @@ const Flows: React.FC = () => {
         name: form.name,
         source_connection_id: Number(form.sourceConnectionId),
         destination_connection_id: Number(form.destinationConnectionId),
-        repository: form.repository,
-        channel: form.channel,
-        channel_label: form.channelLabel,
+        source_resource_id: form.sourceResourceId,
+        source_resource_label: form.sourceResourceLabel,
+        source_resource_type: form.sourceResourceType,
+        destination_resource_id: form.destinationResourceId,
+        destination_resource_label: form.destinationResourceLabel,
+        destination_resource_type: form.destinationResourceType,
         report_style: form.reportStyle,
         instructions: form.instructions,
         window_hours: Number(form.windowHours),
       });
       setForm(emptyForm);
-      setRepositories([]);
-      setChannels([]);
+      setSourceResources([]);
+      setDestinationResources([]);
       setShowBuilder(false);
-      setMessage('Fluxo criado. A primeira execução só acontece quando você apertar Gerar relatório.');
+      setMessage('Fluxo criado. Ele só executa quando você apertar Gerar relatório.');
       await load();
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'Não foi possível criar o fluxo.');
@@ -144,7 +185,7 @@ const Flows: React.FC = () => {
         {},
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
       );
-      setMessage(`Relatório ${response.data.reportId} gerado e publicado no Slack.`);
+      setMessage(`Relatório ${response.data.reportId} gerado e publicado em ${flow.destinationLabel}.`);
       await load();
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'O fluxo falhou. A cota não foi consumida.');
@@ -167,7 +208,7 @@ const Flows: React.FC = () => {
     }
   };
 
-  const noConnections = githubConnections.length === 0 || slackConnections.length === 0;
+  const noConnections = sourceConnections.length === 0 || destinationConnections.length === 0;
 
   return (
     <div className="space-y-7">
@@ -176,7 +217,7 @@ const Flows: React.FC = () => {
           <span className="text-xs font-bold uppercase tracking-[0.18em] text-violet-600">Automação de relatórios</span>
           <h1 className="mt-2 text-3xl font-bold tracking-tight">Fluxos</h1>
           <p className="mt-2 max-w-3xl text-slate-500">
-            Escolha uma fonte, deixe a IA construir o relatório e publique no destino conectado. Nesta primeira etapa: GitHub → Slack.
+            Escolha qualquer conexão compatível como fonte, deixe a IA produzir o relatório e envie para qualquer destino compatível.
           </p>
         </div>
         <button
@@ -191,7 +232,7 @@ const Flows: React.FC = () => {
 
       {noConnections && !loading && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          Conecte pelo menos uma conta GitHub e um workspace Slack na área <strong>Conexões</strong> antes de criar o fluxo.
+          Conecte pelo menos um serviço com capacidade de <strong>fonte</strong> e outro com capacidade de <strong>destino</strong> na área Conexões.
         </div>
       )}
       {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>}
@@ -201,47 +242,50 @@ const Flows: React.FC = () => {
         <form onSubmit={submit} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-xl bg-violet-100 text-violet-700"><Plus size={20} /></div>
-            <div><h2 className="text-xl font-bold">Montar fluxo</h2><p className="text-sm text-slate-500">As duas credenciais pertencem à sua conta Ark.</p></div>
+            <div><h2 className="text-xl font-bold">Montar fluxo</h2><p className="text-sm text-slate-500">Fonte e destino são independentes e pertencem à sua conta Ark.</p></div>
           </div>
 
-          <div className="mt-6 grid gap-5 md:grid-cols-2">
-            <label className="text-sm font-semibold md:col-span-2">Nome do fluxo
-              <input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Relatório semanal do Smart-EAD" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
-            </label>
+          <label className="mt-6 block text-sm font-semibold">Nome do fluxo
+            <input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Relatório semanal do produto" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
+          </label>
 
+          <div className="mt-5 grid gap-5 md:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 font-bold"><GitBranch size={19} /> Fonte GitHub</div>
-              <label className="mt-4 block text-sm font-semibold">Conta conectada
-                <select required value={form.sourceConnectionId} onChange={(event) => changeSource(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                  <option value="">Escolha a conta</option>
-                  {githubConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
+              <div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedSource?.provider || ''} size={19} /> Fonte</div>
+              <label className="mt-4 block text-sm font-semibold">Conexão
+                <select required value={form.sourceConnectionId} onChange={(event) => changeConnection(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
+                  <option value="">Escolha a conexão</option>
+                  {sourceConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
                 </select>
               </label>
-              <label className="mt-4 block text-sm font-semibold">Repositório
-                <select required disabled={!form.sourceConnectionId || busy === 'source-resources'} value={form.repository} onChange={(event) => setForm({ ...form, repository: event.target.value })} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
-                  <option value="">{busy === 'source-resources' ? 'Carregando...' : 'Escolha o repositório'}</option>
-                  {repositories.map((resource) => <option key={resource.id} value={resource.name}>{resource.label}{resource.private ? ' · privado' : ''}</option>)}
+              <label className="mt-4 block text-sm font-semibold">Origem
+                <select required disabled={!form.sourceConnectionId || busy === 'source-resources'} value={form.sourceResourceId} onChange={(event) => chooseResource(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
+                  <option value="">{busy === 'source-resources' ? 'Carregando...' : 'Escolha a origem'}</option>
+                  {sourceResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}
                 </select>
               </label>
+              {selectedSource?.provider === 'slack' && (
+                <div className="mt-4 flex gap-2 rounded-xl bg-blue-50 p-3 text-xs leading-relaxed text-blue-900"><Info size={17} className="mt-0.5 shrink-0" /><span>Para ler mensagens, o app <strong>ArkLog</strong> precisa estar no canal e a conexão deve incluir permissão de histórico. Abra o canal no Slack e use <strong>/invite @ArkLog</strong>. Caso a conexão seja antiga, reconecte-a.</span></div>
+              )}
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 font-bold"><MessageSquare size={19} /> Destino Slack</div>
-              <label className="mt-4 block text-sm font-semibold">Workspace conectado
-                <select required value={form.destinationConnectionId} onChange={(event) => changeDestination(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                  <option value="">Escolha o workspace</option>
-                  {slackConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
+              <div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedDestination?.provider || ''} size={19} /> Destino</div>
+              <label className="mt-4 block text-sm font-semibold">Conexão
+                <select required value={form.destinationConnectionId} onChange={(event) => changeConnection(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
+                  <option value="">Escolha a conexão</option>
+                  {destinationConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
                 </select>
               </label>
-              <label className="mt-4 block text-sm font-semibold">Canal
-                <select required disabled={!form.destinationConnectionId || busy === 'destination-resources'} value={form.channel} onChange={(event) => {
-                  const selected = channels.find((resource) => resource.id === event.target.value);
-                  setForm({ ...form, channel: event.target.value, channelLabel: selected?.label || '' });
-                }} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
-                  <option value="">{busy === 'destination-resources' ? 'Carregando...' : 'Escolha o canal'}</option>
-                  {channels.map((resource) => <option key={resource.id} value={resource.id}>{resource.label}</option>)}
+              <label className="mt-4 block text-sm font-semibold">Destino
+                <select required disabled={!form.destinationConnectionId || busy === 'destination-resources'} value={form.destinationResourceId} onChange={(event) => chooseResource(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
+                  <option value="">{busy === 'destination-resources' ? 'Carregando...' : 'Escolha o destino'}</option>
+                  {destinationResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}
                 </select>
               </label>
+              {selectedDestination?.provider === 'slack' && (
+                <div className="mt-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><Info size={17} className="mt-0.5 shrink-0" /><span><strong>Antes de criar o fluxo:</strong> o app ArkLog precisa participar do canal. No Slack, abra o canal, digite <strong>/invite @ArkLog</strong> e volte a carregar a lista. Canais sem o app ficam marcados como indisponíveis.</span></div>
+              )}
             </div>
 
             <label className="text-sm font-semibold">Formato do relatório
@@ -261,7 +305,7 @@ const Flows: React.FC = () => {
               </select>
             </label>
             <label className="text-sm font-semibold md:col-span-2">Instruções para o relatório
-              <textarea value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} rows={4} placeholder="Ex.: não mencione quantidade de commits; destaque segurança, entregas e próximos passos." className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
+              <textarea value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} rows={4} placeholder="Ex.: destaque entregas, riscos e próximos passos; não cite quantidade de eventos." className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
             </label>
           </div>
 
@@ -285,11 +329,11 @@ const Flows: React.FC = () => {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">{flow.status}</span></div>
                 <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center">
-                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><GitBranch size={17} /><span className="truncate">{flow.sourceConfig.repository}</span></span>
+                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.sourceProvider} size={17} /><span className="truncate">{flow.sourceConfig.resourceLabel || flow.sourceConfig.resourceId}</span></span>
                   <ArrowRight size={18} className="hidden shrink-0 sm:block" />
-                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><MessageSquare size={17} /><span className="truncate">{flow.destinationConfig.channelLabel || flow.destinationConfig.channel}</span></span>
+                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.destinationProvider} size={17} /><span className="truncate">{flow.destinationConfig.resourceLabel || flow.destinationConfig.resourceId}</span></span>
                 </div>
-                <p className="mt-3 text-xs text-slate-500">{flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p>
+                <p className="mt-3 text-xs text-slate-500">{flow.sourceProvider} → {flow.destinationProvider} · {flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p>
               </div>
               <div className="flex gap-2">
                 <button disabled={Boolean(busy)} onClick={() => void execute(flow)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">

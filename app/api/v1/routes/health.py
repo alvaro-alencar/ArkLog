@@ -57,6 +57,9 @@ async def detailed_health_check() -> DetailedHealthResponse:
         ),
         "github_app": "configured" if settings.github_app_configured else "pending",
         "slack_oauth": "configured" if settings.slack_oauth_configured else "pending",
+        "notion_oauth": "configured" if settings.notion_oauth_configured else "pending",
+        "clickup_oauth": "configured" if settings.clickup_oauth_configured else "pending",
+        "trello_oauth": "configured" if settings.trello_oauth_configured else "pending",
     }
 
     try:

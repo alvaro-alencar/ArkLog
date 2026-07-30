@@ -12,6 +12,7 @@ import Settings from './views/Settings';
 import AccessAdmin from './views/AccessAdmin';
 import Connections from './views/Connections';
 import Flows from './views/Flows';
+import TrelloCallback from './views/TrelloCallback';
 
 const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
 
@@ -44,6 +45,7 @@ const App: React.FC = () => (
           <Route path="/" element={<ProtectedRoute><Flows /></ProtectedRoute>} />
           <Route path="/flows" element={<ProtectedRoute><Flows /></ProtectedRoute>} />
           <Route path="/connections" element={<ProtectedRoute><Connections /></ProtectedRoute>} />
+          <Route path="/trello/callback" element={<ProtectedRoute><TrelloCallback /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />

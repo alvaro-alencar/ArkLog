@@ -1,28 +1,42 @@
-import React, { useEffect, useState } from 'react';
-import { GitBranch, MessageSquare, Plug, RefreshCw, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Plug, RefreshCw, Trash2 } from 'lucide-react';
+import ProviderIcon from '../components/ProviderIcon';
 import api from '../lib/api';
+
+type Role = 'source' | 'destination';
 
 type Connection = {
   id: number;
-  provider: 'github' | 'slack';
+  provider: string;
   label: string;
   externalAccountName?: string;
   scopes: string[];
+  capabilities: Role[];
   status: string;
   connectedAt: string;
 };
 
-type Providers = Record<'github' | 'slack', { configured: boolean }>;
+type Provider = {
+  id: string;
+  name: string;
+  description: string;
+  capabilities: Role[];
+  configured: boolean;
+};
+
+const providerOrder = ['github', 'slack', 'notion', 'clickup', 'trello'];
 
 const Connections: React.FC = () => {
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [providers, setProviders] = useState<Providers>({
-    github: { configured: false },
-    slack: { configured: false },
-  });
+  const [providers, setProviders] = useState<Record<string, Provider>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+
+  const providerCards = useMemo(
+    () => providerOrder.map((id) => providers[id]).filter(Boolean),
+    [providers],
+  );
 
   const load = async () => {
     setLoading(true);
@@ -30,7 +44,7 @@ const Connections: React.FC = () => {
     try {
       const response = await api.get('/connections');
       setConnections(response.data.connections || []);
-      setProviders(response.data.providers);
+      setProviders(response.data.providers || {});
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'Não foi possível carregar as conexões.');
     } finally {
@@ -40,7 +54,7 @@ const Connections: React.FC = () => {
 
   useEffect(() => { void load(); }, []);
 
-  const connect = async (provider: 'github' | 'slack') => {
+  const connect = async (provider: string) => {
     setBusy(provider);
     setError('');
     try {
@@ -66,67 +80,50 @@ const Connections: React.FC = () => {
     }
   };
 
-  const cards = [
-    {
-      provider: 'github' as const,
-      icon: <GitBranch size={24} />,
-      title: 'GitHub App',
-      text: 'Fonte para commits, pull requests, issues, CI e releases. Você escolhe exatamente quais repositórios o ArkLog poderá ler.',
-      action: 'Selecionar repositórios',
-    },
-    {
-      provider: 'slack' as const,
-      icon: <MessageSquare size={24} />,
-      title: 'Slack',
-      text: 'Destino para publicar o relatório em um canal escolhido do seu próprio workspace.',
-      action: 'Conectar Slack',
-    },
-  ];
-
   return (
     <div className="space-y-7">
       <header>
         <span className="text-xs font-bold uppercase tracking-[0.18em] text-violet-600">Integrações</span>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">Suas conexões</h1>
         <p className="mt-2 max-w-3xl text-slate-500">
-          Cada pessoa autoriza apenas os próprios serviços. No GitHub, o ArkLog guarda a instalação escolhida e usa credenciais temporárias somente durante a leitura.
+          Cada conta é autorizada pelo próprio usuário e pode atuar como fonte, destino ou ambos, conforme as capacidades do serviço. Os segredos ficam criptografados e nunca chegam ao navegador.
         </p>
       </header>
 
       {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-      <section className="grid gap-4 md:grid-cols-2">
-        {cards.map((card) => {
-          const configured = providers[card.provider]?.configured;
-          return (
-            <article key={card.provider} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white">{card.icon}</div>
-                <span className={`rounded-full px-3 py-1 text-xs font-bold ${configured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
-                  {configured ? 'Disponível' : 'Aguardando configuração'}
-                </span>
-              </div>
-              <h2 className="mt-5 text-xl font-bold">{card.title}</h2>
-              <p className="mt-2 min-h-16 text-sm leading-relaxed text-slate-500">{card.text}</p>
-              <button
-                type="button"
-                disabled={!configured || Boolean(busy)}
-                onClick={() => connect(card.provider)}
-                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {busy === card.provider ? <RefreshCw size={17} className="animate-spin" /> : <Plug size={17} />}
-                {card.action}
-              </button>
-            </article>
-          );
-        })}
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {providerCards.map((provider) => (
+          <article key={provider.id} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white"><ProviderIcon provider={provider.id} size={24} /></div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${provider.configured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
+                {provider.configured ? 'Disponível' : 'Configuração pendente'}
+              </span>
+            </div>
+            <h2 className="mt-5 text-xl font-bold">{provider.name}</h2>
+            <p className="mt-2 min-h-16 text-sm leading-relaxed text-slate-500">{provider.description}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {provider.capabilities.map((role) => <span key={role} className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700">{role === 'source' ? 'Fonte' : 'Destino'}</span>)}
+            </div>
+            <button
+              type="button"
+              disabled={!provider.configured || Boolean(busy)}
+              onClick={() => void connect(provider.id)}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {busy === provider.id ? <RefreshCw size={17} className="animate-spin" /> : <Plug size={17} />}
+              Conectar {provider.name}
+            </button>
+          </article>
+        ))}
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold">Contas conectadas</h2>
-            <p className="mt-1 text-sm text-slate-500">Segredos de conexão ficam criptografados e nunca são enviados ao navegador.</p>
+            <p className="mt-1 text-sm text-slate-500">Uma mesma conexão pode aparecer nas duas pontas do construtor quando o provedor permite leitura e escrita.</p>
           </div>
           <button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-slate-50" aria-label="Atualizar">
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
@@ -139,26 +136,28 @@ const Connections: React.FC = () => {
               Nenhuma conexão ainda. Conecte uma fonte e um destino para montar o primeiro fluxo.
             </div>
           )}
-          {connections.map((connection) => (
-            <div key={connection.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 sm:flex-row sm:items-center">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100">
-                {connection.provider === 'github' ? <GitBranch size={20} /> : <MessageSquare size={20} />}
+          {connections.map((connection) => {
+            const slackNeedsReconnect = connection.provider === 'slack' && !connection.scopes.includes('channels:history');
+            return (
+              <div key={connection.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 sm:flex-row sm:items-center">
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100"><ProviderIcon provider={connection.provider} /></div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold">{connection.label}</p>
+                  <p className="truncate text-xs text-slate-500">{connection.capabilities.map((role) => role === 'source' ? 'Fonte' : 'Destino').join(' · ')}</p>
+                  {slackNeedsReconnect && <p className="mt-1 text-xs font-semibold text-amber-700">Reconecte o Slack para também usá-lo como fonte de mensagens.</p>}
+                </div>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">{connection.status}</span>
+                <button
+                  type="button"
+                  disabled={busy === String(connection.id)}
+                  onClick={() => void disconnect(connection)}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Trash2 size={16} /> Desconectar
+                </button>
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-bold">{connection.label}</p>
-                <p className="truncate text-xs text-slate-500">{connection.scopes.join(' · ') || 'Permissões fornecidas pelo provedor'}</p>
-              </div>
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">{connection.status}</span>
-              <button
-                type="button"
-                disabled={busy === String(connection.id)}
-                onClick={() => void disconnect(connection)}
-                className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                <Trash2 size={16} /> Desconectar
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

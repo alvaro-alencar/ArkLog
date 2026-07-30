@@ -1,9 +1,4 @@
-"""
-ArkLog - Health Check Endpoints
-
-Provides liveness (/health) and readiness (/health/detailed) probes
-for container orchestration (Docker, Kubernetes, etc.).
-"""
+"""Safe liveness and readiness checks for ArkLog."""
 
 import time
 from datetime import datetime, timezone
@@ -17,7 +12,6 @@ from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
-
 _startup_time = time.time()
 
 
@@ -33,22 +27,37 @@ class DetailedHealthResponse(HealthResponse):
     components: dict[str, str]
 
 
+def _base(status: str) -> dict[str, object]:
+    return {
+        "status": status,
+        "version": settings.app_version,
+        "environment": settings.app_env,
+        "uptime_seconds": round(time.time() - _startup_time, 2),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
-    """Liveness probe — confirms the API process is alive."""
-    return HealthResponse(
-        status="healthy",
-        version=settings.app_version,
-        environment=settings.app_env,
-        uptime_seconds=round(time.time() - _startup_time, 2),
-        timestamp=datetime.now(timezone.utc).isoformat(),
-    )
+    """Liveness probe that does not inspect or reveal secrets."""
+    return HealthResponse(**_base("healthy"))
 
 
 @router.get("/health/detailed", response_model=DetailedHealthResponse)
 async def detailed_health_check() -> DetailedHealthResponse:
-    """Readiness probe — checks all critical components are operational."""
-    components: dict[str, str] = {}
+    """Readiness probe with names and states only, never raw exception details."""
+    components: dict[str, str] = {
+        "ark_auth": "configured" if settings.ark_auth_me_url.startswith("https://") else "missing",
+        "openrouter": "configured" if bool(settings.ai_api_key) else "missing",
+        "credential_vault": (
+            "configured"
+            if len(settings.connections_encryption_key.strip()) >= 32
+            and len(settings.oauth_state_secret.strip()) >= 32
+            else "missing"
+        ),
+        "github_app": "configured" if settings.github_app_configured else "pending",
+        "slack_oauth": "configured" if settings.slack_oauth_configured else "pending",
+    }
 
     try:
         from app.models.database import engine
@@ -56,27 +65,14 @@ async def detailed_health_check() -> DetailedHealthResponse:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         components["database"] = "healthy"
-    except Exception as exc:
-        components["database"] = f"unhealthy: {exc}"
+    except Exception:
+        logger.exception("health_database_check_failed")
+        components["database"] = "unhealthy"
 
-    try:
-        from app.config.projects import projects_config
-
-        components["projects_config"] = f"healthy ({len(projects_config.projects)} projects)"
-    except Exception as exc:
-        components["projects_config"] = f"unhealthy: {exc}"
-
+    critical = ("ark_auth", "openrouter", "credential_vault", "database")
     overall = (
         "healthy"
-        if all(v.startswith("healthy") for v in components.values())
+        if all(components[name] in {"configured", "healthy"} for name in critical)
         else "degraded"
     )
-
-    return DetailedHealthResponse(
-        status=overall,
-        version=settings.app_version,
-        environment=settings.app_env,
-        uptime_seconds=round(time.time() - _startup_time, 2),
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        components=components,
-    )
+    return DetailedHealthResponse(**_base(overall), components=components)

@@ -1,7 +1,7 @@
 """ArkLog application configuration.
 
-Platform secrets stay on the server. Personal provider credentials are created by
-OAuth and stored encrypted per Ark user and organization.
+Platform secrets stay on the server. Personal provider connections are created by
+provider installation/OAuth flows and stored encrypted per Ark user and organization.
 """
 
 import os
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "ArkLog"
-    app_version: str = "0.3.1"
+    app_version: str = "0.4.0"
     app_env: str = Field(default="development")
     debug: bool = Field(default=False)
     public_app_url: str = Field(default="http://localhost:5173")
@@ -44,17 +44,25 @@ class Settings(BaseSettings):
     arklog_trial_max_window_hours: int = Field(default=168, ge=1, le=168)
     arklog_trial_max_projects: int = Field(default=1, ge=1, le=1)
 
-    # Credential vault and signed OAuth state. These belong to ArkLog, not to a user.
+    # Credential vault and signed provider state. These belong to ArkLog, not to a user.
     connections_encryption_key: str = Field(default="")
     oauth_state_secret: str = Field(default="")
     oauth_state_ttl_seconds: int = Field(default=600, ge=120, le=1800)
 
-    # GitHub OAuth application. The resulting token belongs to the connected user.
+    # GitHub App owned by ArkLog. Users install it only on repositories they choose.
+    # Installation access tokens are generated on demand and expire automatically.
+    github_app_id: str = Field(default="")
+    github_app_slug: str = Field(default="")
+    github_app_private_key: str = Field(default="")
     github_client_id: str = Field(default="")
     github_client_secret: str = Field(default="")
+    github_setup_uri: str = Field(
+        default="http://localhost:8000/api/v1/connections/github/setup"
+    )
     github_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/connections/github/callback"
     )
+    github_api_version: str = Field(default="2022-11-28")
 
     # Slack OAuth application. The resulting bot token belongs to the connected workspace.
     slack_client_id: str = Field(default="")
@@ -117,6 +125,32 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env == "development" and not self.is_cloud
+
+    @property
+    def github_app_configured(self) -> bool:
+        return all(
+            item.strip()
+            for item in (
+                self.github_app_id,
+                self.github_app_slug,
+                self.github_app_private_key,
+                self.github_client_id,
+                self.github_client_secret,
+                self.github_setup_uri,
+                self.github_redirect_uri,
+            )
+        )
+
+    @property
+    def slack_oauth_configured(self) -> bool:
+        return all(
+            item.strip()
+            for item in (
+                self.slack_client_id,
+                self.slack_client_secret,
+                self.slack_redirect_uri,
+            )
+        )
 
     @property
     def admin_email_set(self) -> set[str]:

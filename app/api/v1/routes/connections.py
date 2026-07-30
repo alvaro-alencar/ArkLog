@@ -1,4 +1,4 @@
-"""User-owned OAuth connections for ArkLog sources and destinations."""
+"""User-owned connections for ArkLog sources and destinations."""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ from sqlalchemy import or_, select
 
 from app.api.v1.deps import get_identity
 from app.core.config import settings
+from app.integrations.github.app_auth import (
+    GitHubAppError,
+    exchange_user_code,
+    resolve_user_installation,
+)
 from app.integrations.runtime import IntegrationRuntimeError, list_connection_resources
 from app.models.database import AsyncSessionLocal
 from app.models.tables import AutomationFlowRecord, IntegrationConnectionRecord, UserRecord
@@ -79,91 +84,100 @@ async def list_connections(identity: ArkIdentity = Depends(get_identity)) -> dic
     return {
         "connections": [_serialize(connection) for connection in connections],
         "providers": {
-            "github": {
-                "configured": bool(
-                    settings.github_client_id and settings.github_client_secret
-                )
-            },
-            "slack": {
-                "configured": bool(
-                    settings.slack_client_id and settings.slack_client_secret
-                )
-            },
+            "github": {"configured": settings.github_app_configured},
+            "slack": {"configured": settings.slack_oauth_configured},
         },
     }
 
 
 @router.get("/github/start")
 async def start_github(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
+    """Start a GitHub App installation where the user chooses repositories."""
     _require_access(identity)
-    if not settings.github_client_id or not settings.github_client_secret:
-        raise HTTPException(status_code=503, detail="GitHub OAuth ainda não foi configurado.")
+    if not settings.github_app_configured:
+        raise HTTPException(status_code=503, detail="GitHub App ainda não foi configurado.")
     organization_id = str(identity.ark_session["organization"]["id"])
     state_token = create_oauth_state("github", identity.user.id, organization_id)
+    query = urlencode({"state": state_token})
+    return {
+        "authorizationUrl": (
+            f"https://github.com/apps/{settings.github_app_slug}/installations/new?{query}"
+        )
+    }
+
+
+@router.get("/github/setup")
+async def github_setup(
+    installation_id: int = Query(..., gt=0),
+    state: str = Query(...),
+    setup_action: str = Query(default="install"),
+) -> RedirectResponse:
+    """Receive the installation ID, sign it, then request GitHub user authorization."""
+    if setup_action not in {"install", "update"}:
+        raise HTTPException(status_code=400, detail="Ação de instalação GitHub inválida.")
+    try:
+        initial = decode_oauth_state(state, "github")
+        authorization_state = create_oauth_state(
+            "github",
+            int(initial["user_id"]),
+            str(initial["organization_id"]),
+            extra={"installation_id": installation_id},
+        )
+    except OAuthStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     query = urlencode(
         {
             "client_id": settings.github_client_id,
             "redirect_uri": settings.github_redirect_uri,
-            "scope": "read:user user:email repo",
-            "state": state_token,
-            "allow_signup": "true",
+            "state": authorization_state,
         }
     )
-    return {"authorizationUrl": f"https://github.com/login/oauth/authorize?{query}"}
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
 
 
 @router.get("/github/callback")
 async def github_callback(code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
+    """Verify the GitHub user and persist only the selected installation ID."""
     try:
         signed = decode_oauth_state(state, "github")
+        installation_id = int(signed.get("installation_id") or 0)
+        if installation_id <= 0:
+            raise OAuthStateError("GitHub installation is missing from the signed state.")
+        user_token = await exchange_user_code(code)
+        installation = await resolve_user_installation(user_token, installation_id)
     except OAuthStateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GitHubAppError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        token_response = await client.post(
-            "https://github.com/login/oauth/access_token",
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.github_client_id,
-                "client_secret": settings.github_client_secret,
-                "code": code,
-                "redirect_uri": settings.github_redirect_uri,
-            },
-        )
-        token_payload = token_response.json()
-        access_token = str(token_payload.get("access_token") or "")
-        if not token_response.is_success or not access_token:
-            raise HTTPException(status_code=502, detail="GitHub não concluiu a autorização.")
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "ArkLog/0.3",
-        }
-        profile_response = await client.get(
-            f"{settings.github_api_base_url}/user", headers=headers
-        )
-        if not profile_response.is_success:
-            raise HTTPException(status_code=502, detail="GitHub não retornou o perfil autorizado.")
-        profile = profile_response.json()
-
-    scopes_value = str(token_payload.get("scope") or token_response.headers.get("X-OAuth-Scopes", ""))
-    scopes = [item.strip() for item in scopes_value.split(",") if item.strip()]
+    account = installation.get("account") or {}
+    permissions = installation.get("permissions") or {}
+    installation_value = int(installation.get("id") or 0)
+    if installation_value <= 0:
+        raise HTTPException(status_code=502, detail="GitHub não retornou uma instalação válida.")
+    scopes = [
+        f"{name}:{level}"
+        for name, level in sorted(permissions.items())
+        if str(level).lower() != "none"
+    ]
+    account_name = str(account.get("login") or account.get("name") or "GitHub")
     await _upsert_connection(
         user_id=int(signed["user_id"]),
         organization_id=str(signed["organization_id"]),
         provider="github",
-        label=f"GitHub · {profile.get('login')}",
-        external_account_id=str(profile.get("id")),
-        external_account_name=str(profile.get("login") or "GitHub"),
-        credentials={
-            "access_token": access_token,
-            "token_type": token_payload.get("token_type"),
-        },
+        label=f"GitHub App · {account_name}",
+        external_account_id=str(installation_value),
+        external_account_name=account_name,
+        credentials={"installation_id": installation_value},
         scopes=scopes,
         details={
-            "avatarUrl": profile.get("avatar_url"),
-            "profileUrl": profile.get("html_url"),
+            "accountId": account.get("id"),
+            "accountType": account.get("type"),
+            "avatarUrl": account.get("avatar_url"),
+            "profileUrl": account.get("html_url"),
+            "installationId": installation_value,
+            "repositorySelection": installation.get("repository_selection"),
+            "manageUrl": installation.get("html_url"),
         },
     )
     return RedirectResponse(
@@ -174,7 +188,7 @@ async def github_callback(code: str = Query(...), state: str = Query(...)) -> Re
 @router.get("/slack/start")
 async def start_slack(identity: ArkIdentity = Depends(get_identity)) -> dict[str, str]:
     _require_access(identity)
-    if not settings.slack_client_id or not settings.slack_client_secret:
+    if not settings.slack_oauth_configured:
         raise HTTPException(status_code=503, detail="Slack OAuth ainda não foi configurado.")
     organization_id = str(identity.ark_session["organization"]["id"])
     state_token = create_oauth_state("slack", identity.user.id, organization_id)

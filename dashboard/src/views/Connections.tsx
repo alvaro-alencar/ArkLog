@@ -70,14 +70,16 @@ const Connections: React.FC = () => {
     {
       provider: 'github' as const,
       icon: <GitBranch size={24} />,
-      title: 'GitHub',
-      text: 'Fonte inicial para commits, pull requests, issues, CI e releases. A autorização pertence à sua conta.',
+      title: 'GitHub App',
+      text: 'Fonte para commits, pull requests, issues, CI e releases. Você escolhe exatamente quais repositórios o ArkLog poderá ler.',
+      action: 'Selecionar repositórios',
     },
     {
       provider: 'slack' as const,
       icon: <MessageSquare size={24} />,
       title: 'Slack',
-      text: 'Destino inicial para publicar o relatório em um canal escolhido do seu workspace.',
+      text: 'Destino para publicar o relatório em um canal escolhido do seu próprio workspace.',
+      action: 'Conectar Slack',
     },
   ];
 
@@ -87,7 +89,7 @@ const Connections: React.FC = () => {
         <span className="text-xs font-bold uppercase tracking-[0.18em] text-violet-600">Integrações</span>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">Suas conexões</h1>
         <p className="mt-2 max-w-3xl text-slate-500">
-          Cada conta autoriza apenas os próprios serviços. O ArkLog não usa um token administrativo escondido para ler seus dados.
+          Cada pessoa autoriza apenas os próprios serviços. No GitHub, o ArkLog guarda a instalação escolhida e usa credenciais temporárias somente durante a leitura.
         </p>
       </header>
 
@@ -113,7 +115,7 @@ const Connections: React.FC = () => {
                 className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy === card.provider ? <RefreshCw size={17} className="animate-spin" /> : <Plug size={17} />}
-                Conectar {card.title}
+                {card.action}
               </button>
             </article>
           );
@@ -124,7 +126,7 @@ const Connections: React.FC = () => {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold">Contas conectadas</h2>
-            <p className="mt-1 text-sm text-slate-500">Os tokens ficam criptografados e nunca são enviados ao navegador.</p>
+            <p className="mt-1 text-sm text-slate-500">Segredos de conexão ficam criptografados e nunca são enviados ao navegador.</p>
           </div>
           <button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-slate-50" aria-label="Atualizar">
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
@@ -144,7 +146,7 @@ const Connections: React.FC = () => {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="font-bold">{connection.label}</p>
-                <p className="truncate text-xs text-slate-500">{connection.scopes.join(' · ') || 'Escopos fornecidos pelo provedor'}</p>
+                <p className="truncate text-xs text-slate-500">{connection.scopes.join(' · ') || 'Permissões fornecidas pelo provedor'}</p>
               </div>
               <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">{connection.status}</span>
               <button

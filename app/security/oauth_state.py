@@ -1,4 +1,4 @@
-"""Short-lived signed state for provider OAuth callbacks."""
+"""Short-lived signed state for provider installation and OAuth callbacks."""
 
 from __future__ import annotations
 
@@ -19,12 +19,14 @@ def create_oauth_state(
     provider: str,
     user_id: int,
     organization_id: str,
+    *,
+    extra: dict[str, Any] | None = None,
 ) -> str:
     secret = settings.oauth_state_secret.strip()
     if len(secret) < 32:
         raise OAuthStateError("OAUTH_STATE_SECRET must contain at least 32 characters.")
     now = datetime.now(UTC)
-    payload = {
+    payload: dict[str, Any] = {
         "provider": provider,
         "user_id": user_id,
         "organization_id": organization_id,
@@ -32,6 +34,11 @@ def create_oauth_state(
         "iat": now,
         "exp": now + timedelta(seconds=settings.oauth_state_ttl_seconds),
     }
+    reserved = set(payload)
+    for key, value in (extra or {}).items():
+        if key in reserved:
+            raise OAuthStateError(f"OAuth state field {key} is reserved.")
+        payload[key] = value
     return jwt.encode(payload, secret, algorithm="HS256")
 
 

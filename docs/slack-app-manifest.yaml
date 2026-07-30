@@ -1,0 +1,20 @@
+display_information:
+  name: ArkLog
+  description: Publica relatórios produzidos pelos fluxos ArkLog.
+  background_color: "#171717"
+features:
+  bot_user:
+    display_name: ArkLog
+    always_online: false
+oauth_config:
+  redirect_urls:
+    - https://www.arksystem.net/api/arklog/v1/connections/slack/callback
+  scopes:
+    bot:
+      - channels:read
+      - groups:read
+      - chat:write
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

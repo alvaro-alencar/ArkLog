@@ -8,6 +8,11 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.integrations.github.app_auth import (
+    GitHubAppError,
+    create_installation_token,
+    list_installation_repositories,
+)
 from app.models.tables import IntegrationConnectionRecord
 from app.security.credentials import decrypt_credentials
 
@@ -42,12 +47,40 @@ async def collect_source(
     repo_full_name = str(config.get("repository") or "").strip()
     if "/" not in repo_full_name:
         raise IntegrationRuntimeError("Choose a GitHub repository for the source.")
-    owner, repo = repo_full_name.split("/", 1)
-    credentials = decrypt_credentials(connection.encrypted_credentials)
-    token = str(credentials.get("access_token") or "")
-    if not token:
-        raise IntegrationRuntimeError("Reconnect GitHub before running this flow.")
 
+    credentials = decrypt_credentials(connection.encrypted_credentials)
+    try:
+        installation_id = int(credentials.get("installation_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise IntegrationRuntimeError("Reinstall the GitHub App before running this flow.") from exc
+    if installation_id <= 0:
+        raise IntegrationRuntimeError("Reinstall the GitHub App before running this flow.")
+
+    try:
+        selected_repositories = await list_installation_repositories(installation_id)
+        selected = next(
+            (
+                item
+                for item in selected_repositories
+                if str(item.get("full_name") or "").casefold() == repo_full_name.casefold()
+            ),
+            None,
+        )
+        if selected is None:
+            raise IntegrationRuntimeError(
+                "This repository is no longer selected in the GitHub App installation."
+            )
+        repository_id = int(selected.get("id") or 0)
+        if repository_id <= 0:
+            raise IntegrationRuntimeError("GitHub returned an invalid repository selection.")
+        token = await create_installation_token(
+            installation_id,
+            repository_id=repository_id,
+        )
+    except GitHubAppError as exc:
+        raise IntegrationRuntimeError(str(exc)) from exc
+
+    owner, repo = repo_full_name.split("/", 1)
     from app.integrations.github.api_client import fetch_github_activity
 
     activity = await fetch_github_activity(
@@ -196,46 +229,27 @@ def _normalize_github_activity(
 
 
 async def _github_repositories(credentials: dict[str, Any]) -> list[dict[str, Any]]:
-    token = str(credentials.get("access_token") or "")
-    if not token:
-        raise IntegrationRuntimeError("GitHub connection has no active token.")
-    resources: list[dict[str, Any]] = []
-    page = 1
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        while page <= 5:
-            response = await client.get(
-                f"{settings.github_api_base_url}/user/repos",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                    "User-Agent": "ArkLog/0.3",
-                },
-                params={
-                    "per_page": 100,
-                    "page": page,
-                    "sort": "updated",
-                    "affiliation": "owner,collaborator,organization_member",
-                },
-            )
-            if response.status_code in {401, 403}:
-                raise IntegrationRuntimeError("Reconnect GitHub to refresh access.")
-            response.raise_for_status()
-            items = response.json()
-            for repo in items:
-                resources.append(
-                    {
-                        "id": str(repo.get("id")),
-                        "name": repo.get("full_name"),
-                        "label": repo.get("full_name"),
-                        "private": bool(repo.get("private")),
-                        "url": repo.get("html_url"),
-                    }
-                )
-            if len(items) < 100:
-                break
-            page += 1
-    return resources
+    try:
+        installation_id = int(credentials.get("installation_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise IntegrationRuntimeError("Reinstall the GitHub App to select repositories.") from exc
+    if installation_id <= 0:
+        raise IntegrationRuntimeError("Reinstall the GitHub App to select repositories.")
+    try:
+        items = await list_installation_repositories(installation_id)
+    except GitHubAppError as exc:
+        raise IntegrationRuntimeError(str(exc)) from exc
+    return [
+        {
+            "id": str(repo.get("id")),
+            "name": repo.get("full_name"),
+            "label": repo.get("full_name"),
+            "private": bool(repo.get("private")),
+            "url": repo.get("html_url"),
+        }
+        for repo in items
+        if repo.get("id") and repo.get("full_name")
+    ]
 
 
 async def _slack_channels(credentials: dict[str, Any]) -> list[dict[str, Any]]:

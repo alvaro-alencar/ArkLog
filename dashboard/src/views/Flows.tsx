@@ -1,5 +1,19 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Info, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Clock3,
+  History,
+  Info,
+  Pause,
+  Play,
+  Plus,
+  Power,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 import ProviderIcon from '../components/ProviderIcon';
 import api from '../lib/api';
 
@@ -39,6 +53,28 @@ type Flow = {
   reportConfig: { style?: string; instructions?: string; windowHours?: number };
 };
 
+type Preflight = {
+  ready: boolean;
+  message: string;
+  checks: Array<{
+    role: Role;
+    provider: string;
+    ready: boolean;
+    resourceLabel: string;
+    message: string;
+  }>;
+};
+
+type Run = {
+  id: string;
+  status: string;
+  trigger: string;
+  reportId?: number | null;
+  error?: string | null;
+  createdAt: string;
+  completedAt?: string | null;
+};
+
 const emptyForm = {
   name: '',
   sourceConnectionId: '',
@@ -54,11 +90,25 @@ const emptyForm = {
   windowHours: '168',
 };
 
+const flowStatus = (status: string) => status === 'ACTIVE'
+  ? 'bg-emerald-100 text-emerald-700'
+  : 'bg-amber-100 text-amber-800';
+
+const runStatus = (status: string) => {
+  if (status === 'COMPLETED') return { label: 'Concluído', className: 'bg-emerald-100 text-emerald-700' };
+  if (status === 'FAILED') return { label: 'Falhou', className: 'bg-red-100 text-red-700' };
+  if (status === 'RESERVED') return { label: 'Em andamento', className: 'bg-amber-100 text-amber-800' };
+  return { label: status, className: 'bg-slate-100 text-slate-600' };
+};
+
 const Flows: React.FC = () => {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
   const [sourceResources, setSourceResources] = useState<Resource[]>([]);
   const [destinationResources, setDestinationResources] = useState<Resource[]>([]);
+  const [preflights, setPreflights] = useState<Record<number, Preflight>>({});
+  const [runs, setRuns] = useState<Record<number, Run[]>>({});
+  const [openHistory, setOpenHistory] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [showBuilder, setShowBuilder] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -166,10 +216,25 @@ const Flows: React.FC = () => {
       setSourceResources([]);
       setDestinationResources([]);
       setShowBuilder(false);
-      setMessage('Fluxo criado. Ele só executa quando você apertar Gerar relatório.');
+      setMessage('Fluxo criado. Faça o pré-teste antes da primeira execução.');
       await load();
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'Não foi possível criar o fluxo.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const preflight = async (flow: Flow) => {
+    setBusy(`test-${flow.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const response = await api.post(`/operations/flows/${flow.id}/preflight`);
+      setPreflights((current) => ({ ...current, [flow.id]: response.data }));
+      if (response.data.ready) setMessage(`${flow.name}: fonte e destino estão prontos.`);
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível pré-testar este fluxo.');
     } finally {
       setBusy('');
     }
@@ -186,9 +251,39 @@ const Flows: React.FC = () => {
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
       );
       setMessage(`Relatório ${response.data.reportId} gerado e publicado em ${flow.destinationLabel}.`);
-      await load();
+      await Promise.all([load(), loadRuns(flow, true)]);
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'O fluxo falhou. A cota não foi consumida.');
+      await loadRuns(flow, true);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggle = async (flow: Flow) => {
+    const nextStatus = flow.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+    setBusy(`toggle-${flow.id}`);
+    setError('');
+    try {
+      await api.patch(`/operations/flows/${flow.id}`, { status: nextStatus });
+      setMessage(nextStatus === 'ACTIVE' ? `${flow.name} reativado.` : `${flow.name} pausado.`);
+      await load();
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível alterar o estado do fluxo.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const loadRuns = async (flow: Flow, keepOpen = false) => {
+    setBusy(`history-${flow.id}`);
+    setError('');
+    try {
+      const response = await api.get(`/operations/flows/${flow.id}/runs`);
+      setRuns((current) => ({ ...current, [flow.id]: response.data.runs || [] }));
+      setOpenHistory((current) => keepOpen ? flow.id : current === flow.id ? null : flow.id);
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível carregar o histórico do fluxo.');
     } finally {
       setBusy('');
     }
@@ -220,12 +315,7 @@ const Flows: React.FC = () => {
             Escolha qualquer conexão compatível como fonte, deixe a IA produzir o relatório e envie para qualquer destino compatível.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={noConnections}
-          onClick={() => setShowBuilder((value) => !value)}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
+        <button type="button" disabled={noConnections} onClick={() => setShowBuilder((value) => !value)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
           <Plus size={18} /> Novo fluxo
         </button>
       </header>
@@ -319,31 +409,73 @@ const Flows: React.FC = () => {
       )}
 
       <section className="space-y-4">
-        <div className="flex items-center justify-between"><h2 className="text-xl font-bold">Fluxos ativos</h2><button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-white"><RefreshCw size={18} className={loading ? 'animate-spin' : ''} /></button></div>
-        {!loading && flows.length === 0 && (
-          <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">Nenhum fluxo criado. Conecte as pontas e abra a primeira ponte.</div>
-        )}
-        {flows.map((flow) => (
-          <article key={flow.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-center">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">{flow.status}</span></div>
-                <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center">
-                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.sourceProvider} size={17} /><span className="truncate">{flow.sourceConfig.resourceLabel || flow.sourceConfig.resourceId}</span></span>
-                  <ArrowRight size={18} className="hidden shrink-0 sm:block" />
-                  <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.destinationProvider} size={17} /><span className="truncate">{flow.destinationConfig.resourceLabel || flow.destinationConfig.resourceId}</span></span>
+        <div className="flex items-center justify-between"><h2 className="text-xl font-bold">Fluxos</h2><button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-white"><RefreshCw size={18} className={loading ? 'animate-spin' : ''} /></button></div>
+        {!loading && flows.length === 0 && <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">Nenhum fluxo criado. Conecte as pontas e abra a primeira ponte.</div>}
+        {flows.map((flow) => {
+          const preflightResult = preflights[flow.id];
+          const history = runs[flow.id] || [];
+          return (
+            <article key={flow.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-center">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${flowStatus(flow.status)}`}>{flow.status === 'ACTIVE' ? 'ATIVO' : 'PAUSADO'}</span></div>
+                    <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center">
+                      <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.sourceProvider} size={17} /><span className="truncate">{flow.sourceConfig.resourceLabel || flow.sourceConfig.resourceId}</span></span>
+                      <ArrowRight size={18} className="hidden shrink-0 sm:block" />
+                      <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.destinationProvider} size={17} /><span className="truncate">{flow.destinationConfig.resourceLabel || flow.destinationConfig.resourceId}</span></span>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500">{flow.sourceProvider} → {flow.destinationProvider} · {flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={Boolean(busy)} onClick={() => void preflight(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">
+                      {busy === `test-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Activity size={17} />} Pré-testar
+                    </button>
+                    <button disabled={Boolean(busy)} onClick={() => void loadRuns(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">
+                      {busy === `history-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <History size={17} />} Histórico
+                    </button>
+                    <button disabled={Boolean(busy)} onClick={() => void toggle(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                      {flow.status === 'ACTIVE' ? <Pause size={17} /> : <Power size={17} />} {flow.status === 'ACTIVE' ? 'Pausar' : 'Ativar'}
+                    </button>
+                    <button disabled={Boolean(busy) || flow.status !== 'ACTIVE'} onClick={() => void execute(flow)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">
+                      {busy === `run-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Play size={17} />} Gerar relatório
+                    </button>
+                    <button disabled={Boolean(busy)} onClick={() => void archive(flow)} className="rounded-xl p-2.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" aria-label="Arquivar fluxo"><Trash2 size={18} /></button>
+                  </div>
                 </div>
-                <p className="mt-3 text-xs text-slate-500">{flow.sourceProvider} → {flow.destinationProvider} · {flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p>
+
+                {preflightResult && (
+                  <div className={`rounded-2xl border p-4 text-sm ${preflightResult.ready ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-amber-200 bg-amber-50 text-amber-950'}`}>
+                    <div className="flex items-center gap-2 font-bold">{preflightResult.ready ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}{preflightResult.message}</div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {preflightResult.checks.map((check) => <p key={check.role} className="text-xs"><strong>{check.role === 'source' ? 'Fonte' : 'Destino'}:</strong> {check.message}</p>)}
+                    </div>
+                  </div>
+                )}
+
+                {openHistory === flow.id && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h4 className="font-bold">Últimas execuções</h4>
+                    <div className="mt-3 space-y-2">
+                      {history.length === 0 && <p className="text-sm text-slate-500">Este fluxo ainda não possui tentativas registradas.</p>}
+                      {history.map((run) => {
+                        const style = runStatus(run.status);
+                        return (
+                          <div key={run.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center">
+                            <Clock3 size={16} className="text-slate-400" />
+                            <div className="min-w-0 flex-1"><p className="text-sm font-semibold">{new Date(run.createdAt).toLocaleString('pt-BR')}</p>{run.error && <p className="mt-1 truncate text-xs text-red-700">{run.error}</p>}</div>
+                            {run.reportId && <a href={`/arklog/reports`} className="text-xs font-bold text-violet-700">Relatório #{run.reportId}</a>}
+                            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${style.className}`}>{style.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex gap-2">
-                <button disabled={Boolean(busy)} onClick={() => void execute(flow)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">
-                  {busy === `run-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Play size={17} />} Gerar relatório
-                </button>
-                <button disabled={Boolean(busy)} onClick={() => void archive(flow)} className="rounded-xl p-2.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" aria-label="Arquivar fluxo"><Trash2 size={18} /></button>
-              </div>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </section>
     </div>
   );

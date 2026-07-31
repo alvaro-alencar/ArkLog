@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { translations, type Locale, type TranslationKeys } from '../lib/i18n';
 
 interface UserSettings {
   locale: Locale;
   timezone: string;
   countryCode: string;
-  reportStyle: 'technical' | 'executive';
+  reportStyle: 'technical' | 'executive' | 'mixed';
 }
 
 interface SettingsContextType {
@@ -18,7 +18,7 @@ const DEFAULTS: UserSettings = {
   locale: 'pt-BR',
   timezone: 'America/Sao_Paulo',
   countryCode: 'BR',
-  reportStyle: 'technical',
+  reportStyle: 'mixed',
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
@@ -34,8 +34,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
 
   const updateSettings = useCallback((patch: Partial<UserSettings>) => {
-    setSettings(prev => {
-      const next = { ...prev, ...patch };
+    setSettings((previous) => {
+      const next = { ...previous, ...patch };
       localStorage.setItem('arklog_settings', JSON.stringify(next));
       return next;
     });
@@ -55,7 +55,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 };
 
 export const useSettings = () => {
-  const ctx = useContext(SettingsContext);
-  if (!ctx) throw new Error('useSettings must be used within SettingsProvider');
-  return ctx;
+  const context = useContext(SettingsContext);
+  if (!context) throw new Error('useSettings must be used within SettingsProvider');
+  return context;
 };

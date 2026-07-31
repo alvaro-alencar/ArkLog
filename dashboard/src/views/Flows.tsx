@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import ProviderIcon from '../components/ProviderIcon';
+import { useSettings } from '../contexts/SettingsContext';
 import api from '../lib/api';
 
 type Role = 'source' | 'destination';
@@ -129,6 +130,7 @@ const existingResource = (
 ): Resource[] => id ? [{ id, name: label, label: label || id, type, available: true }] : [];
 
 const Flows: React.FC = () => {
+  const { settings } = useSettings();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
   const [sourceResources, setSourceResources] = useState<Resource[]>([]);
@@ -154,6 +156,12 @@ const Flows: React.FC = () => {
   );
   const selectedSource = sourceConnections.find((item) => String(item.id) === form.sourceConnectionId);
   const selectedDestination = destinationConnections.find((item) => String(item.id) === form.destinationConnectionId);
+
+  const preferredReportStyle = settings.reportStyle === 'technical'
+    ? 'tecnico'
+    : settings.reportStyle === 'executive'
+      ? 'executivo'
+      : 'misto';
 
   const load = async () => {
     setLoading(true);
@@ -221,7 +229,7 @@ const Flows: React.FC = () => {
   };
 
   const openCreate = () => {
-    setForm(emptyForm);
+    setForm({ ...emptyForm, reportStyle: preferredReportStyle });
     setSourceResources([]);
     setDestinationResources([]);
     setEditor({ mode: 'create' });
@@ -418,123 +426,32 @@ const Flows: React.FC = () => {
         </button>
       </header>
 
-      {noConnections && !loading && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">Conecte pelo menos um serviço com capacidade de <strong>fonte</strong> e outro com capacidade de <strong>destino</strong> na área Conexões.</div>
-      )}
+      {noConnections && !loading && <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">Conecte pelo menos um serviço com capacidade de <strong>fonte</strong> e outro com capacidade de <strong>destino</strong> na área Conexões.</div>}
       {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>}
       {message && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800">{message}</div>}
 
       {editor && (
         <form onSubmit={submit} className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm ring-4 ring-violet-50 sm:p-7">
           <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-violet-100 text-violet-700">{editor.mode === 'edit' ? <Pencil size={20} /> : <Plus size={20} />}</div>
-              <div><h2 className="text-xl font-bold">{editor.mode === 'edit' ? 'Editar fluxo' : 'Montar fluxo'}</h2><p className="text-sm text-slate-500">O ArkLog confirma as duas pontas diretamente nos provedores antes de salvar.</p></div>
-            </div>
+            <div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-violet-100 text-violet-700">{editor.mode === 'edit' ? <Pencil size={20} /> : <Plus size={20} />}</div><div><h2 className="text-xl font-bold">{editor.mode === 'edit' ? 'Editar fluxo' : 'Montar fluxo'}</h2><p className="text-sm text-slate-500">O ArkLog confirma as duas pontas diretamente nos provedores antes de salvar.</p></div></div>
             <button type="button" onClick={closeEditor} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Fechar editor"><X size={19} /></button>
           </div>
-
-          <label className="mt-6 block text-sm font-semibold">Nome do fluxo
-            <input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Relatório semanal do produto" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
-          </label>
-
+          <label className="mt-6 block text-sm font-semibold">Nome do fluxo<input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Relatório semanal do produto" className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" /></label>
           <div className="mt-5 grid gap-5 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedSource?.provider || ''} size={19} /> Fonte</div>
-              <label className="mt-4 block text-sm font-semibold">Conexão
-                <select required value={form.sourceConnectionId} onChange={(event) => changeConnection(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                  <option value="">Escolha a conexão</option>
-                  {sourceConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
-                </select>
-              </label>
-              <label className="mt-4 block text-sm font-semibold">Origem
-                <select required disabled={!form.sourceConnectionId || resourceBusy.source} value={form.sourceResourceId} onChange={(event) => chooseResource(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
-                  <option value="">{resourceBusy.source ? 'Carregando...' : 'Escolha a origem'}</option>
-                  {sourceResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}
-                </select>
-              </label>
-              {selectedSource?.provider === 'slack' && <div className="mt-4 flex gap-2 rounded-xl bg-blue-50 p-3 text-xs leading-relaxed text-blue-900"><Info size={17} className="mt-0.5 shrink-0" /><span>Para ler mensagens, use <strong>/invite @ArkLog</strong> no canal e reconecte contas antigas que não tenham permissão de histórico.</span></div>}
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedDestination?.provider || ''} size={19} /> Destino</div>
-              <label className="mt-4 block text-sm font-semibold">Conexão
-                <select required value={form.destinationConnectionId} onChange={(event) => changeConnection(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                  <option value="">Escolha a conexão</option>
-                  {destinationConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}
-                </select>
-              </label>
-              <label className="mt-4 block text-sm font-semibold">Destino
-                <select required disabled={!form.destinationConnectionId || resourceBusy.destination} value={form.destinationResourceId} onChange={(event) => chooseResource(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100">
-                  <option value="">{resourceBusy.destination ? 'Carregando...' : 'Escolha o destino'}</option>
-                  {destinationResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}
-                </select>
-              </label>
-              {selectedDestination?.provider === 'slack' && <div className="mt-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><Info size={17} className="mt-0.5 shrink-0" /><span>Antes de salvar, abra o canal no Slack e use <strong>/invite @ArkLog</strong>. Canais sem o app ficam indisponíveis.</span></div>}
-            </div>
-
-            <label className="text-sm font-semibold">Formato do relatório
-              <select value={form.reportStyle} onChange={(event) => setForm({ ...form, reportStyle: event.target.value })} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                <option value="misto">Executivo + técnico</option><option value="executivo">Executivo</option><option value="tecnico">Técnico</option>
-              </select>
-            </label>
-            <label className="text-sm font-semibold">Janela de coleta
-              <select value={form.windowHours} onChange={(event) => setForm({ ...form, windowHours: event.target.value })} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3">
-                <option value="24">Últimas 24 horas</option><option value="72">Últimos 3 dias</option><option value="168">Últimos 7 dias</option><option value="336">Últimos 14 dias</option><option value="720">Últimos 30 dias</option>
-              </select>
-            </label>
-            <label className="text-sm font-semibold md:col-span-2">Instruções para o relatório
-              <textarea value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} rows={4} placeholder="Ex.: destaque entregas, riscos e próximos passos; não cite quantidade de eventos." className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" />
-            </label>
+            <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedSource?.provider || ''} size={19} /> Fonte</div><label className="mt-4 block text-sm font-semibold">Conexão<select required value={form.sourceConnectionId} onChange={(event) => changeConnection(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"><option value="">Escolha a conexão</option>{sourceConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}</select></label><label className="mt-4 block text-sm font-semibold">Origem<select required disabled={!form.sourceConnectionId || resourceBusy.source} value={form.sourceResourceId} onChange={(event) => chooseResource(event.target.value, 'source')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100"><option value="">{resourceBusy.source ? 'Carregando...' : 'Escolha a origem'}</option>{sourceResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}</select></label>{selectedSource?.provider === 'slack' && <div className="mt-4 flex gap-2 rounded-xl bg-blue-50 p-3 text-xs leading-relaxed text-blue-900"><Info size={17} className="mt-0.5 shrink-0" /><span>Para ler mensagens, use <strong>/invite @ArkLog</strong> no canal e reconecte contas antigas que não tenham permissão de histórico.</span></div>}</div>
+            <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center gap-2 font-bold"><ProviderIcon provider={selectedDestination?.provider || ''} size={19} /> Destino</div><label className="mt-4 block text-sm font-semibold">Conexão<select required value={form.destinationConnectionId} onChange={(event) => changeConnection(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"><option value="">Escolha a conexão</option>{destinationConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.label}</option>)}</select></label><label className="mt-4 block text-sm font-semibold">Destino<select required disabled={!form.destinationConnectionId || resourceBusy.destination} value={form.destinationResourceId} onChange={(event) => chooseResource(event.target.value, 'destination')} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 disabled:bg-slate-100"><option value="">{resourceBusy.destination ? 'Carregando...' : 'Escolha o destino'}</option>{destinationResources.map((resource) => <option key={resource.id} value={resource.id} disabled={resource.available === false}>{resource.label}{resource.private ? ' · privado' : ''}{resource.available === false ? ` · ${resource.availabilityReason || 'indisponível'}` : ''}</option>)}</select></label>{selectedDestination?.provider === 'slack' && <div className="mt-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><Info size={17} className="mt-0.5 shrink-0" /><span>Antes de salvar, abra o canal no Slack e use <strong>/invite @ArkLog</strong>. Canais sem o app ficam indisponíveis.</span></div>}</div>
+            <label className="text-sm font-semibold">Formato do relatório<select value={form.reportStyle} onChange={(event) => setForm({ ...form, reportStyle: event.target.value })} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"><option value="misto">Executivo + técnico</option><option value="executivo">Executivo</option><option value="tecnico">Técnico</option></select></label>
+            <label className="text-sm font-semibold">Janela de coleta<select value={form.windowHours} onChange={(event) => setForm({ ...form, windowHours: event.target.value })} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"><option value="24">Últimas 24 horas</option><option value="72">Últimos 3 dias</option><option value="168">Últimos 7 dias</option><option value="336">Últimos 14 dias</option><option value="720">Últimos 30 dias</option></select></label>
+            <label className="text-sm font-semibold md:col-span-2">Instruções para o relatório<textarea value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} rows={4} placeholder="Ex.: destaque entregas, riscos e próximos passos; não cite quantidade de eventos." className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-violet-500" /></label>
           </div>
-
-          <div className="mt-6 flex justify-end gap-3">
-            <button type="button" onClick={closeEditor} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100">Cancelar</button>
-            <button disabled={Boolean(busy) || resourceBusy.source || resourceBusy.destination} className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">
-              {busy.startsWith('edit-') || busy === 'create' ? <RefreshCw size={17} className="animate-spin" /> : editor.mode === 'edit' ? <Save size={17} /> : <ArrowRight size={17} />}
-              {editor.mode === 'edit' ? 'Salvar alterações' : 'Criar fluxo'}
-            </button>
-          </div>
+          <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={closeEditor} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100">Cancelar</button><button disabled={Boolean(busy) || resourceBusy.source || resourceBusy.destination} className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">{busy.startsWith('edit-') || busy === 'create' ? <RefreshCw size={17} className="animate-spin" /> : editor.mode === 'edit' ? <Save size={17} /> : <ArrowRight size={17} />}{editor.mode === 'edit' ? 'Salvar alterações' : 'Criar fluxo'}</button></div>
         </form>
       )}
 
       <section className="space-y-4">
         <div className="flex items-center justify-between"><h2 className="text-xl font-bold">Fluxos</h2><button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-white"><RefreshCw size={18} className={loading ? 'animate-spin' : ''} /></button></div>
         {!loading && flows.length === 0 && <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">Nenhum fluxo criado. Conecte as pontas e abra a primeira ponte.</div>}
-        {flows.map((flow) => {
-          const preflightResult = preflights[flow.id];
-          const history = runs[flow.id] || [];
-          return (
-            <article key={flow.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div className="flex flex-col gap-5">
-                <div className="flex flex-col gap-5 lg:flex-row lg:items-center">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${flowStatus(flow.status)}`}>{flow.status === 'ACTIVE' ? 'ATIVO' : 'PAUSADO'}</span></div>
-                    <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center">
-                      <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.sourceProvider} size={17} /><span className="truncate">{flow.sourceConfig.resourceLabel || flow.sourceConfig.resourceId}</span></span>
-                      <ArrowRight size={18} className="hidden shrink-0 sm:block" />
-                      <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.destinationProvider} size={17} /><span className="truncate">{flow.destinationConfig.resourceLabel || flow.destinationConfig.resourceId}</span></span>
-                    </div>
-                    <p className="mt-3 text-xs text-slate-500">{flow.sourceProvider} → {flow.destinationProvider} · {flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button disabled={Boolean(busy)} onClick={() => openEdit(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"><Pencil size={17} /> Editar</button>
-                    <button disabled={Boolean(busy)} onClick={() => void cloneFlow(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `clone-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Copy size={17} />} Duplicar</button>
-                    <button disabled={Boolean(busy)} onClick={() => void preflight(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `test-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Activity size={17} />} Pré-testar</button>
-                    <button disabled={Boolean(busy)} onClick={() => void loadRuns(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `history-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <History size={17} />} Histórico</button>
-                    <button disabled={Boolean(busy)} onClick={() => void toggle(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{flow.status === 'ACTIVE' ? <Pause size={17} /> : <Power size={17} />} {flow.status === 'ACTIVE' ? 'Pausar' : 'Ativar'}</button>
-                    <button disabled={Boolean(busy) || flow.status !== 'ACTIVE'} onClick={() => void execute(flow)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">{busy === `run-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Play size={17} />} Gerar relatório</button>
-                    <button disabled={Boolean(busy)} onClick={() => void archive(flow)} className="rounded-xl p-2.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" aria-label="Arquivar fluxo"><Trash2 size={18} /></button>
-                  </div>
-                </div>
-
-                {preflightResult && <div className={`rounded-2xl border p-4 text-sm ${preflightResult.ready ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-amber-200 bg-amber-50 text-amber-950'}`}><div className="flex items-center gap-2 font-bold">{preflightResult.ready ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}{preflightResult.message}</div><div className="mt-2 grid gap-2 sm:grid-cols-2">{preflightResult.checks.map((check) => <p key={check.role} className="text-xs"><strong>{check.role === 'source' ? 'Fonte' : 'Destino'}:</strong> {check.message}</p>)}</div></div>}
-
-                {openHistory === flow.id && <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><h4 className="font-bold">Últimas execuções</h4><div className="mt-3 space-y-2">{history.length === 0 && <p className="text-sm text-slate-500">Este fluxo ainda não possui tentativas registradas.</p>}{history.map((run) => { const style = runStatus(run.status); return <div key={run.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center"><Clock3 size={16} className="text-slate-400" /><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{new Date(run.createdAt).toLocaleString('pt-BR')}</p>{run.error && <p className="mt-1 truncate text-xs text-red-700">{run.error}</p>}</div>{run.reportId && <a href="/arklog/reports" className="text-xs font-bold text-violet-700">Relatório #{run.reportId}</a>}<span className={`rounded-full px-2.5 py-1 text-xs font-bold ${style.className}`}>{style.label}</span></div>; })}</div></div>}
-              </div>
-            </article>
-          );
-        })}
+        {flows.map((flow) => { const preflightResult = preflights[flow.id]; const history = runs[flow.id] || []; return <article key={flow.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"><div className="flex flex-col gap-5"><div className="flex flex-col gap-5 lg:flex-row lg:items-center"><div className="min-w-0 flex-1"><div className="flex items-center gap-3"><h3 className="truncate text-xl font-bold">{flow.name}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${flowStatus(flow.status)}`}>{flow.status === 'ACTIVE' ? 'ATIVO' : 'PAUSADO'}</span></div><div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 sm:flex-row sm:items-center"><span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.sourceProvider} size={17} /><span className="truncate">{flow.sourceConfig.resourceLabel || flow.sourceConfig.resourceId}</span></span><ArrowRight size={18} className="hidden shrink-0 sm:block" /><span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2"><ProviderIcon provider={flow.destinationProvider} size={17} /><span className="truncate">{flow.destinationConfig.resourceLabel || flow.destinationConfig.resourceId}</span></span></div><p className="mt-3 text-xs text-slate-500">{flow.sourceProvider} → {flow.destinationProvider} · {flow.reportConfig.style || 'misto'} · últimas {flow.reportConfig.windowHours || 168} horas</p></div><div className="flex flex-wrap gap-2"><button disabled={Boolean(busy)} onClick={() => openEdit(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"><Pencil size={17} /> Editar</button><button disabled={Boolean(busy)} onClick={() => void cloneFlow(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `clone-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Copy size={17} />} Duplicar</button><button disabled={Boolean(busy)} onClick={() => void preflight(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `test-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Activity size={17} />} Pré-testar</button><button disabled={Boolean(busy)} onClick={() => void loadRuns(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">{busy === `history-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <History size={17} />} Histórico</button><button disabled={Boolean(busy)} onClick={() => void toggle(flow)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{flow.status === 'ACTIVE' ? <Pause size={17} /> : <Power size={17} />} {flow.status === 'ACTIVE' ? 'Pausar' : 'Ativar'}</button><button disabled={Boolean(busy) || flow.status !== 'ACTIVE'} onClick={() => void execute(flow)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">{busy === `run-${flow.id}` ? <RefreshCw size={17} className="animate-spin" /> : <Play size={17} />} Gerar relatório</button><button disabled={Boolean(busy)} onClick={() => void archive(flow)} className="rounded-xl p-2.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" aria-label="Arquivar fluxo"><Trash2 size={18} /></button></div></div>{preflightResult && <div className={`rounded-2xl border p-4 text-sm ${preflightResult.ready ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-amber-200 bg-amber-50 text-amber-950'}`}><div className="flex items-center gap-2 font-bold">{preflightResult.ready ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}{preflightResult.message}</div><div className="mt-2 grid gap-2 sm:grid-cols-2">{preflightResult.checks.map((check) => <p key={check.role} className="text-xs"><strong>{check.role === 'source' ? 'Fonte' : 'Destino'}:</strong> {check.message}</p>)}</div></div>}{openHistory === flow.id && <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><h4 className="font-bold">Últimas execuções</h4><div className="mt-3 space-y-2">{history.length === 0 && <p className="text-sm text-slate-500">Este fluxo ainda não possui tentativas registradas.</p>}{history.map((run) => { const style = runStatus(run.status); return <div key={run.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center"><Clock3 size={16} className="text-slate-400" /><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{new Date(run.createdAt).toLocaleString('pt-BR')}</p>{run.error && <p className="mt-1 truncate text-xs text-red-700">{run.error}</p>}</div>{run.reportId && <a href="/arklog/reports" className="text-xs font-bold text-violet-700">Relatório #{run.reportId}</a>}<span className={`rounded-full px-2.5 py-1 text-xs font-bold ${style.className}`}>{style.label}</span></div>; })}</div></div>}</div></article>; })}
       </section>
     </div>
   );

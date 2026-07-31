@@ -74,11 +74,33 @@ def _missing_secure_configuration() -> list[str]:
     return missing
 
 
+def _forbidden_global_credentials() -> list[str]:
+    """Detect credentials from the retired admin-token architecture by variable name only."""
+    from app.core.config import settings
+
+    forbidden: list[str] = []
+    if settings.clickup_api_token.strip():
+        forbidden.append("CLICKUP_API_TOKEN")
+    if settings.clickup_team_id.strip():
+        forbidden.append("CLICKUP_TEAM_ID")
+    return forbidden
+
+
 def _validate_production_config() -> None:
     from app.core.config import settings
 
     if not settings.requires_secure_configuration:
         return
+
+    forbidden = _forbidden_global_credentials()
+    if forbidden:
+        logger.error("legacy_global_credentials_forbidden", variables=forbidden)
+        raise RuntimeError(
+            "Legacy global provider configuration is forbidden in production: "
+            + ", ".join(forbidden)
+            + ". Connect the provider through the ArkLog user interface instead."
+        )
+
     missing = _missing_secure_configuration()
     if missing:
         logger.error("secure_configuration_missing", missing=missing)

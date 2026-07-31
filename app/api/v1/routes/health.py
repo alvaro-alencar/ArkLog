@@ -2,9 +2,11 @@
 
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -13,6 +15,7 @@ from app.core.config import settings
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 _startup_time = time.time()
+_CRITICAL_COMPONENTS = ("ark_auth", "openrouter", "credential_vault", "database")
 
 
 class HealthResponse(BaseModel):
@@ -37,17 +40,12 @@ def _base(status: str) -> dict[str, object]:
     }
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """Liveness probe that does not inspect or reveal secrets."""
-    return HealthResponse(**_base("healthy"))
-
-
-@router.get("/health/detailed", response_model=DetailedHealthResponse)
-async def detailed_health_check() -> DetailedHealthResponse:
-    """Readiness probe with names and states only, never raw exception details."""
-    components: dict[str, str] = {
-        "ark_auth": "configured" if settings.ark_auth_me_url.startswith("https://") else "missing",
+def _configured_components() -> dict[str, str]:
+    """Describe configuration by state only, never by secret value."""
+    return {
+        "ark_auth": "configured"
+        if settings.ark_auth_me_url.startswith("https://")
+        else "missing",
         "openrouter": "configured" if bool(settings.ai_api_key) else "missing",
         "credential_vault": (
             "configured"
@@ -62,6 +60,9 @@ async def detailed_health_check() -> DetailedHealthResponse:
         "trello_oauth": "configured" if settings.trello_oauth_configured else "pending",
     }
 
+
+async def _readiness_snapshot() -> tuple[str, dict[str, str]]:
+    components = _configured_components()
     try:
         from app.models.database import engine
 
@@ -72,10 +73,59 @@ async def detailed_health_check() -> DetailedHealthResponse:
         logger.exception("health_database_check_failed")
         components["database"] = "unhealthy"
 
-    critical = ("ark_auth", "openrouter", "credential_vault", "database")
     overall = (
         "healthy"
-        if all(components[name] in {"configured", "healthy"} for name in critical)
+        if all(components[name] in {"configured", "healthy"} for name in _CRITICAL_COMPONENTS)
         else "degraded"
     )
+    return overall, components
+
+
+def _readiness_payload(status: str, components: dict[str, str]) -> dict[str, Any]:
+    configured_providers = [
+        name.removesuffix("_oauth").removesuffix("_app")
+        for name, state in components.items()
+        if name not in _CRITICAL_COMPONENTS
+        and name != "database"
+        and state == "configured"
+    ]
+    pending_providers = [
+        name.removesuffix("_oauth").removesuffix("_app")
+        for name, state in components.items()
+        if name not in _CRITICAL_COMPONENTS
+        and name != "database"
+        and state == "pending"
+    ]
+    return {
+        **_base(status),
+        "ready": status == "healthy",
+        "components": components,
+        "providers": {
+            "configured": configured_providers,
+            "pending": pending_providers,
+        },
+    }
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    """Liveness probe that does not inspect or reveal secrets."""
+    return HealthResponse(**_base("healthy"))
+
+
+@router.get("/health/detailed", response_model=DetailedHealthResponse)
+async def detailed_health_check() -> DetailedHealthResponse:
+    """Human-readable diagnostic with names and states only."""
+    overall, components = await _readiness_snapshot()
     return DetailedHealthResponse(**_base(overall), components=components)
+
+
+@router.get("/health/ready", response_class=JSONResponse)
+async def readiness_check() -> JSONResponse:
+    """Machine readiness probe: HTTP 200 when operable, HTTP 503 otherwise."""
+    overall, components = await _readiness_snapshot()
+    payload = _readiness_payload(overall, components)
+    return JSONResponse(
+        status_code=200 if payload["ready"] else 503,
+        content=payload,
+    )

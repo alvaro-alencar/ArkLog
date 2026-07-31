@@ -13,6 +13,7 @@ import {
   Filter,
   Layers3,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Workflow,
@@ -107,20 +108,26 @@ const downloadMarkdown = (report: ReportDetail) => {
 const ReportCard: React.FC<{
   report: ReportSummary;
   onMessage: (message: string) => void;
-}> = ({ report, onMessage }) => {
+  onRefresh: () => Promise<void> | void;
+}> = ({ report, onMessage, onRefresh }) => {
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<ReportDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState('');
   const style = statusStyle(report.status);
+
+  const loadDetail = async () => {
+    const response = await api.get(`/reports/${report.id}`);
+    setDetail(response.data);
+  };
 
   const expand = async () => {
     if (!expanded && !detail) {
       setLoading(true);
       setError('');
       try {
-        const response = await api.get(`/reports/${report.id}`);
-        setDetail(response.data);
+        await loadDetail();
       } catch (caught: any) {
         setError(caught?.response?.data?.detail || 'Não foi possível abrir este relatório.');
       } finally {
@@ -139,6 +146,34 @@ const ReportCard: React.FC<{
       onMessage('O navegador não permitiu copiar automaticamente.');
     }
   };
+
+  const retryPublication = async () => {
+    if (!detail) return;
+    setRetrying(true);
+    setError('');
+    try {
+      const response = await api.post(`/deliveries/reports/${detail.id}/retry`);
+      await loadDetail();
+      await onRefresh();
+      const provider = response.data?.publication?.provider || detail.destination_provider || 'destino';
+      onMessage(`Relatório republicado em ${provider}, sem nova geração de IA e sem consumo de cota.`);
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível republicar. O relatório continua salvo e nenhuma cota foi consumida.');
+      try {
+        await loadDetail();
+        await onRefresh();
+      } catch {
+        // Preserve the original publication error when refreshing also fails.
+      }
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const retryable = Boolean(
+    detail?.flow_id
+    && detail.publications.some((publication) => publication.status === 'failed'),
+  );
 
   return (
     <article className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -182,6 +217,11 @@ const ReportCard: React.FC<{
           {detail && (
             <div className="space-y-5">
               <div className="flex flex-wrap justify-end gap-2">
+                {retryable && (
+                  <button type="button" disabled={retrying} onClick={() => void retryPublication()} className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50">
+                    {retrying ? <RefreshCw size={16} className="animate-spin" /> : <RotateCcw size={16} />} Republicar sem gerar novamente
+                  </button>
+                )}
                 <button type="button" onClick={() => void copy()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-violet-300 hover:text-violet-700">
                   <Clipboard size={16} /> Copiar
                 </button>
@@ -351,7 +391,7 @@ const Reports: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {reports.map((report) => <ReportCard key={report.id} report={report} onMessage={setMessage} />)}
+          {reports.map((report) => <ReportCard key={report.id} report={report} onMessage={setMessage} onRefresh={load} />)}
         </div>
       )}
 

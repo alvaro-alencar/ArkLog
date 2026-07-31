@@ -7,6 +7,7 @@ from app.api.v1.routes.analytics import router as analytics_router
 from app.api.v1.routes.auth import router as auth_router
 from app.api.v1.routes.clickup import router as clickup_router
 from app.api.v1.routes.connections import router as connections_router
+from app.api.v1.routes.deliveries import router as deliveries_router
 from app.api.v1.routes.flows import router as flows_router
 from app.api.v1.routes.github import router as github_router
 from app.api.v1.routes.health import router as health_router
@@ -23,6 +24,7 @@ router.include_router(access_router, prefix="/access", tags=["access"])
 router.include_router(connections_router, prefix="/connections", tags=["connections"])
 router.include_router(flows_router, prefix="/flows", tags=["flows"])
 router.include_router(operations_router, prefix="/operations", tags=["operations"])
+router.include_router(deliveries_router, prefix="/deliveries", tags=["deliveries"])
 router.include_router(github_router, prefix="/github", tags=["github-legacy"])
 router.include_router(clickup_router, prefix="/clickup", tags=["clickup-legacy"])
 router.include_router(webhooks_router, prefix="/webhooks", tags=["webhooks"])

@@ -3,6 +3,7 @@
 from app.api.v1.routes.operations import _connection_check, _resource_check
 from app.api.v1.routes.reports import _to_summary
 from app.models.tables import ReportRecord
+from app.utils.datetime_utils import naive_utcnow
 
 
 def test_report_summary_uses_provider_neutral_item_count() -> None:
@@ -15,6 +16,7 @@ def test_report_summary_uses_provider_neutral_item_count() -> None:
         commit_count=13,
         flow_id=4,
         project_id=None,
+        generated_at=naive_utcnow(),
     )
 
     summary = _to_summary(

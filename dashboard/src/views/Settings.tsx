@@ -1,209 +1,232 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { User, Globe, Cpu, Link2, AlertTriangle, Check, Copy, ChevronDown } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  Building2,
+  Check,
+  ExternalLink,
+  Gauge,
+  Globe2,
+  KeyRound,
+  Plug,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  SlidersHorizontal,
+  User,
+  Workflow,
+} from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { COUNTRIES, LOCALE_NAMES, type Locale } from '../lib/i18n';
 import api from '../lib/api';
 
-const WEBHOOK_URL = `${window.location.origin}/api/v1/webhooks/github`;
-
-const Section: React.FC<{ icon: React.ReactNode; title: string; desc: string; children: React.ReactNode }> = ({ icon, title, desc, children }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 12 }}
-    animate={{ opacity: 1, y: 0 }}
-    className="glass-card p-6 space-y-5"
-  >
-    <div className="flex items-start gap-3 pb-4 border-b border-white/5">
-      <div className="text-purple-400 mt-0.5">{icon}</div>
+const Section: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}> = ({ icon, title, description, children }) => (
+  <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+    <div className="flex items-start gap-3 border-b border-slate-100 pb-5">
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-100 text-violet-700">{icon}</div>
       <div>
-        <h3 className="text-sm font-bold text-white">{title}</h3>
-        <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+        <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">{description}</p>
       </div>
     </div>
-    {children}
-  </motion.div>
+    <div className="mt-5">{children}</div>
+  </section>
 );
 
-const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div className="grid grid-cols-3 items-center gap-4">
-    <label className="text-xs text-gray-400 font-medium">{label}</label>
-    <div className="col-span-2">{children}</div>
+const LabelValue: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="rounded-2xl bg-slate-50 p-4">
+    <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+    <div className="mt-2 text-sm font-semibold text-slate-800">{value}</div>
   </div>
 );
 
 const Settings: React.FC = () => {
-  const { user } = useAuth();
-  const { settings, t, updateSettings } = useSettings();
-
+  const { user, organization, access, refreshAccess } = useAuth();
+  const { settings, updateSettings } = useSettings();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [copied, setCopied] = useState(false);
-  const [selectedCountry, setSelectedCountry] = useState(
-    COUNTRIES.find(c => c.code === settings.countryCode) ?? COUNTRIES[0]
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const selectedCountry = useMemo(
+    () => COUNTRIES.find((country) => country.code === settings.countryCode) ?? COUNTRIES[0],
+    [settings.countryCode],
   );
 
   const handleCountryChange = (code: string) => {
-    const country = COUNTRIES.find(c => c.code === code);
+    const country = COUNTRIES.find((item) => item.code === code);
     if (!country) return;
-    setSelectedCountry(country);
-    updateSettings({ countryCode: country.code, locale: country.locale, timezone: country.timezone });
+    updateSettings({
+      countryCode: country.code,
+      locale: country.locale,
+      timezone: country.timezone,
+    });
   };
 
   const handleSave = async () => {
     setSaveState('saving');
+    setError('');
+    setMessage('');
     try {
       await api.patch('/users/me', {
         timezone: settings.timezone,
         language: settings.locale,
       });
-    } catch {
-      // preferences saved locally regardless
+      setSaveState('saved');
+      setMessage('Preferências salvas neste navegador e sincronizadas com sua conta ArkLog.');
+    } catch (caught: any) {
+      setSaveState('idle');
+      setError(caught?.response?.data?.detail || 'As preferências ficaram salvas neste navegador, mas não foi possível sincronizá-las agora.');
+      return;
     }
-    setSaveState('saved');
-    setTimeout(() => setSaveState('idle'), 2000);
+    window.setTimeout(() => setSaveState('idle'), 1800);
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(WEBHOOK_URL);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const refreshAccount = async () => {
+    setRefreshing(true);
+    setError('');
+    setMessage('');
+    try {
+      await refreshAccess();
+      setMessage('Conta, organização e limites atualizados a partir do ArkSystem.');
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível atualizar os dados da conta.');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
-  const s = t.settings;
+  const usagePercent = access?.reportLimit
+    ? Math.min(100, Math.round((access.reportsUsed / access.reportLimit) * 100))
+    : 0;
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">{s.title}</h2>
-        <p className="text-gray-400 mt-1">{s.subtitle}</p>
+    <div className="space-y-7">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <span className="text-xs font-bold uppercase tracking-[0.18em] text-violet-600">Conta e preferências</span>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight">Configurações</h1>
+          <p className="mt-2 max-w-3xl text-slate-500">A conta pertence ao ArkSystem. Aqui ficam apenas preferências reais do ArkLog e um retrato transparente do seu acesso.</p>
+        </div>
+        <button type="button" disabled={refreshing} onClick={() => void refreshAccount()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">
+          <RefreshCw size={17} className={refreshing ? 'animate-spin' : ''} /> Atualizar conta
+        </button>
+      </header>
+
+      {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>}
+      {message && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800">{message}</div>}
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Section icon={<User size={20} />} title="Conta Ark" description="O ArkLog reutiliza a mesma identidade do ecossistema, sem criar um login paralelo.">
+          <div className="flex items-center gap-4 rounded-2xl border border-slate-200 p-4">
+            {user?.avatar_url ? (
+              <img src={user.avatar_url} alt="" className="h-14 w-14 rounded-2xl object-cover" />
+            ) : (
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-500"><User size={24} /></div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-lg font-bold text-slate-950">{user?.name || 'Conta Ark'}</p>
+              <p className="truncate text-sm text-slate-500">{user?.email || 'E-mail não informado'}</p>
+            </div>
+            {user?.isPlatformAdmin && <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-700">Admin da plataforma</span>}
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <LabelValue label="Identificador" value={user?.id || 'Não informado'} />
+            <LabelValue label="Usuário" value={user?.username ? `@${user.username}` : 'Gerenciado pelo ArkSystem'} />
+          </div>
+        </Section>
+
+        <Section icon={<Building2 size={20} />} title="Organização atual" description="Conexões e fluxos ficam isolados dentro desta organização Ark.">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <LabelValue label="Organização" value={organization?.name || 'Não informada'} />
+            <LabelValue label="Slug" value={organization?.slug || 'Não informado'} />
+            <LabelValue label="Plano" value={organization?.plan || 'Padrão'} />
+            <LabelValue label="Papel" value={organization?.role || 'Membro'} />
+          </div>
+        </Section>
       </div>
 
-      {/* Profile */}
-      <Section icon={<User size={16} />} title={s.profile} desc={s.profileDesc}>
-        <Field label={s.username}>
-          <div className="flex items-center gap-3">
-            {user?.avatar_url && (
-              <img src={user.avatar_url} alt={user.username} className="w-8 h-8 rounded-full border border-white/10" />
-            )}
-            <span className="text-sm text-white font-medium">@{user?.username}</span>
+      <Section icon={<Gauge size={20} />} title="Acesso e consumo" description="O limite conta gerações de relatórios. Pré-testes, edição, clonagem e republicação de conteúdo salvo não consomem cota.">
+        <div className="grid gap-4 md:grid-cols-[1fr_1.5fr]">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-1">
+            <LabelValue label="Status" value={<span className={`rounded-full px-3 py-1 text-xs font-bold ${access?.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' : access?.status === 'TRIAL' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-800'}`}>{access?.status || 'PENDENTE'}</span>} />
+            <LabelValue label="Perfil" value={access?.isAdmin ? 'Administrador do ArkLog' : 'Usuário'} />
           </div>
-        </Field>
-        <Field label={s.email}>
-          <span className="text-sm text-gray-400">{s.notProvided}</span>
-        </Field>
+          <div className="rounded-2xl border border-slate-200 p-5">
+            <div className="flex items-end justify-between gap-4">
+              <div><p className="text-sm font-bold">Relatórios gerados</p><p className="mt-1 text-sm text-slate-500">{access?.reportsUsed ?? 0} usados {access?.remainingReports === null ? '· acesso sem limite' : `· ${access?.remainingReports ?? 0} restantes`}</p></div>
+              {access?.reportLimit ? <strong className="text-2xl">{usagePercent}%</strong> : <strong className="text-2xl">∞</strong>}
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-600 transition-all" style={{ width: `${access?.reportLimit ? usagePercent : 100}%` }} /></div>
+          </div>
+        </div>
       </Section>
 
-      {/* Language & Region */}
-      <Section icon={<Globe size={16} />} title={s.langRegion} desc={s.langRegionDesc}>
-        <Field label={s.country}>
-          <div className="relative">
-            <select
-              className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white appearance-none focus:outline-none focus:border-purple-500 transition-all pr-8"
-              value={selectedCountry.code}
-              onChange={e => handleCountryChange(e.target.value)}
-            >
-              {COUNTRIES.map(c => (
-                <option key={c.code} value={c.code}>
-                  {c.flag} {c.nameEn}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={14} className="absolute right-2.5 top-3 text-gray-500 pointer-events-none" />
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Section icon={<Globe2 size={20} />} title="Idioma e região" description="O país ajusta idioma e fuso horário. Essas preferências também são persistidas no perfil do ArkLog.">
+          <div className="space-y-4">
+            <label className="block text-sm font-semibold text-slate-700">País
+              <select value={selectedCountry.code} onChange={(event) => handleCountryChange(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-violet-500">
+                {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.flag} {country.nameEn}</option>)}
+              </select>
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <LabelValue label="Idioma" value={LOCALE_NAMES[settings.locale as Locale]} />
+              <LabelValue label="Fuso horário" value={<span className="font-mono text-xs">{settings.timezone}</span>} />
+            </div>
           </div>
-        </Field>
+        </Section>
 
-        <Field label={s.language}>
-          <div className="flex items-center gap-2 px-3 py-2 bg-black/30 border border-white/5 rounded-lg">
-            <span className="text-lg">{selectedCountry.flag}</span>
-            <span className="text-sm text-white">{LOCALE_NAMES[settings.locale as Locale]}</span>
-          </div>
-        </Field>
-
-        <Field label={s.timezone}>
-          <div className="px-3 py-2 bg-black/30 border border-white/5 rounded-lg text-sm text-gray-300 font-mono">
-            {settings.timezone}
-          </div>
-        </Field>
-      </Section>
-
-      {/* AI Preferences */}
-      <Section icon={<Cpu size={16} />} title={s.aiPrefs} desc={s.aiPrefsDesc}>
-        <Field label={s.reportStyle}>
-          <div className="grid grid-cols-2 gap-2">
-            {(['technical', 'executive'] as const).map(style => (
-              <button
-                key={style}
-                onClick={() => updateSettings({ reportStyle: style })}
-                className={`p-3 rounded-lg border text-left transition-all ${
-                  settings.reportStyle === style
-                    ? 'bg-purple-500/20 border-purple-500/50 text-white'
-                    : 'bg-black/30 border-white/5 text-gray-400 hover:border-white/20'
-                }`}
-              >
-                <p className="text-xs font-bold">{s[style]}</p>
-                <p className="text-[10px] mt-0.5 text-gray-500">{s[`${style}Desc`]}</p>
+        <Section icon={<SlidersHorizontal size={20} />} title="Padrão para novos fluxos" description="A escolha entra automaticamente no editor quando você abre um novo fluxo. Fluxos existentes não são alterados.">
+          <div className="grid gap-3">
+            {[
+              ['mixed', 'Executivo + técnico', 'Equilibra leitura gerencial com evidências técnicas.'],
+              ['executive', 'Executivo', 'Foca impacto, riscos, decisões e próximos passos.'],
+              ['technical', 'Técnico', 'Prioriza mudanças, automações, falhas e detalhes de implementação.'],
+            ].map(([value, title, description]) => (
+              <button key={value} type="button" onClick={() => updateSettings({ reportStyle: value as 'mixed' | 'executive' | 'technical' })} className={`rounded-2xl border p-4 text-left transition ${settings.reportStyle === value ? 'border-violet-400 bg-violet-50 ring-4 ring-violet-100' : 'border-slate-200 hover:border-violet-200'}`}>
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 grid h-5 w-5 place-items-center rounded-full border ${settings.reportStyle === value ? 'border-violet-600 bg-violet-600 text-white' : 'border-slate-300'}`}>{settings.reportStyle === value && <Check size={13} />}</div>
+                  <div><p className="font-bold text-slate-900">{title}</p><p className="mt-1 text-sm text-slate-500">{description}</p></div>
+                </div>
               </button>
             ))}
           </div>
-        </Field>
-      </Section>
-
-      {/* Integrations */}
-      <Section icon={<Link2 size={16} />} title={s.integrations} desc={s.integrationsDesc}>
-        <Field label={s.webhookUrl}>
-          <div className="flex gap-2">
-            <input
-              readOnly
-              value={WEBHOOK_URL}
-              className="flex-1 bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-xs text-gray-300 font-mono focus:outline-none"
-            />
-            <button
-              onClick={handleCopy}
-              className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-gray-400 hover:text-white hover:border-white/20 transition-all"
-            >
-              {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-            </button>
-          </div>
-        </Field>
-        <p className="text-[11px] text-gray-600 col-span-3 pl-0">{s.webhookInstructions}</p>
-      </Section>
-
-      {/* Save */}
-      <div className="flex justify-end">
-        <button
-          onClick={handleSave}
-          disabled={saveState !== 'idle'}
-          className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${
-            saveState === 'saved'
-              ? 'bg-green-500/20 border border-green-500/30 text-green-400'
-              : 'bg-white text-black hover:bg-gray-200 disabled:opacity-60'
-          }`}
-        >
-          {saveState === 'saving' && <div className="w-3.5 h-3.5 border-2 border-black/30 border-t-black rounded-full animate-spin" />}
-          {saveState === 'saved' && <Check size={14} />}
-          {s[saveState === 'idle' ? 'save' : saveState === 'saving' ? 'saving' : 'saved']}
-        </button>
+        </Section>
       </div>
 
-      {/* Danger Zone */}
-      <Section icon={<AlertTriangle size={16} className="text-red-400" />} title={s.dangerZone} desc={s.dangerZoneDesc}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-400">{s.deleteAccount}</p>
-            <p className="text-xs text-gray-600 mt-0.5">{s.deleteWarning}</p>
+      <Section icon={<ShieldCheck size={20} />} title="Integrações e segurança" description="Não há tokens pessoais globais nem webhook GitHub manual escondido nesta tela.">
+        <div className="grid gap-4 md:grid-cols-3">
+          <Link to="/connections" className="group rounded-2xl border border-slate-200 p-5 transition hover:border-violet-300 hover:bg-violet-50">
+            <Plug size={22} className="text-violet-600" /><p className="mt-4 font-bold">Conexões do usuário</p><p className="mt-2 text-sm text-slate-500">Autorize, teste e revogue serviços pela interface.</p>
+          </Link>
+          <Link to="/" className="group rounded-2xl border border-slate-200 p-5 transition hover:border-violet-300 hover:bg-violet-50">
+            <Workflow size={22} className="text-violet-600" /><p className="mt-4 font-bold">Fluxos isolados</p><p className="mt-2 text-sm text-slate-500">Cada ponta pertence à sua conta e à organização atual.</p>
+          </Link>
+          <div className="rounded-2xl border border-slate-200 p-5">
+            <KeyRound size={22} className="text-violet-600" /><p className="mt-4 font-bold">Cofre criptografado</p><p className="mt-2 text-sm text-slate-500">Credenciais ficam no backend e nunca são exibidas novamente no navegador.</p>
           </div>
-          <button
-            onClick={() => {
-              if (window.confirm(s.deleteWarning)) {
-                alert('Feature coming soon.');
-              }
-            }}
-            className="px-4 py-2 text-xs font-bold text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/10 transition-all"
-          >
-            {s.deleteAccount}
-          </button>
         </div>
       </Section>
+
+      <Section icon={<ShieldCheck size={20} />} title="Gerenciamento da conta" description="Criação, senha, sessão e eventual encerramento da conta pertencem ao ArkSystem, não a uma cópia local do ArkLog.">
+        <div className="flex flex-col gap-4 rounded-2xl bg-slate-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div><p className="font-bold text-slate-900">Conta centralizada</p><p className="mt-1 text-sm text-slate-500">O ArkLog não exibe um botão de exclusão fictício. Alterações sensíveis devem acontecer no serviço central da conta Ark.</p></div>
+          <a href="https://www.arksystem.net" className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-violet-300 hover:text-violet-700">Abrir ArkSystem <ExternalLink size={16} /></a>
+        </div>
+      </Section>
+
+      <div className="flex justify-end">
+        <button type="button" onClick={() => void handleSave()} disabled={saveState === 'saving'} className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold transition disabled:opacity-60 ${saveState === 'saved' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-950 text-white hover:bg-violet-700'}`}>
+          {saveState === 'saving' ? <RefreshCw size={17} className="animate-spin" /> : saveState === 'saved' ? <Check size={17} /> : <Save size={17} />}
+          {saveState === 'saving' ? 'Salvando...' : saveState === 'saved' ? 'Preferências salvas' : 'Salvar preferências'}
+        </button>
+      </div>
     </div>
   );
 };

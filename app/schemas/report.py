@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ReportPublicationResponse(BaseModel):
@@ -15,6 +15,8 @@ class ReportPublicationResponse(BaseModel):
 
 
 class ReportSummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     project_id: int | None = None
     flow_id: int | None = None
@@ -28,9 +30,6 @@ class ReportSummaryResponse(BaseModel):
     item_count: int
     commit_count: int
     generated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class ReportDetailResponse(ReportSummaryResponse):

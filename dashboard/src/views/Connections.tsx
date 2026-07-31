@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plug, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Activity, AlertCircle, CheckCircle2, Plug, RefreshCw, Search, Trash2 } from 'lucide-react';
 import ProviderIcon from '../components/ProviderIcon';
 import api from '../lib/api';
 
@@ -26,12 +26,26 @@ type Provider = {
   configured: boolean;
 };
 
+type Diagnostic = {
+  healthy: boolean;
+  status: string;
+  checks: Array<{
+    role: Role;
+    ready: boolean;
+    resourceCount: number;
+    availableCount: number;
+    unavailableCount: number;
+    message: string;
+  }>;
+};
+
 const providerOrder = ['github', 'slack', 'notion', 'clickup', 'trello'];
 const allCategories = 'Todas';
 
 const Connections: React.FC = () => {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [providers, setProviders] = useState<Record<string, Provider>>({});
+  const [diagnostics, setDiagnostics] = useState<Record<number, Diagnostic>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -92,12 +106,30 @@ const Connections: React.FC = () => {
     }
   };
 
+  const testConnection = async (connection: Connection) => {
+    setBusy(`test-${connection.id}`);
+    setError('');
+    try {
+      const response = await api.post(`/operations/connections/${connection.id}/test`);
+      setDiagnostics((current) => ({ ...current, [connection.id]: response.data }));
+    } catch (caught: any) {
+      setError(caught?.response?.data?.detail || 'Não foi possível testar esta conexão.');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const disconnect = async (connection: Connection) => {
     if (!window.confirm(`Desconectar ${connection.label}?`)) return;
-    setBusy(String(connection.id));
+    setBusy(`delete-${connection.id}`);
     setError('');
     try {
       await api.delete(`/connections/${connection.id}`);
+      setDiagnostics((current) => {
+        const next = { ...current };
+        delete next[connection.id];
+        return next;
+      });
       await load();
     } catch (caught: any) {
       setError(caught?.response?.data?.detail || 'Não foi possível desconectar esta conta.');
@@ -183,11 +215,11 @@ const Connections: React.FC = () => {
         </div>
       )}
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7 shadow-sm">
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold">Contas conectadas</h2>
-            <p className="mt-1 text-sm text-slate-500">Uma mesma conexão pode aparecer nas duas pontas do construtor quando o provedor permite leitura e escrita.</p>
+            <p className="mt-1 text-sm text-slate-500">Teste a conexão antes de montar fluxos. O diagnóstico verifica acesso e recursos sem revelar credenciais.</p>
           </div>
           <button onClick={() => void load()} className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-slate-50" aria-label="Atualizar">
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
@@ -202,23 +234,38 @@ const Connections: React.FC = () => {
           )}
           {connections.map((connection) => {
             const slackNeedsReconnect = connection.provider === 'slack' && !connection.scopes.includes('channels:history');
+            const diagnostic = diagnostics[connection.id];
             return (
-              <div key={connection.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 sm:flex-row sm:items-center">
-                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100"><ProviderIcon provider={connection.provider} /></div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-bold">{connection.label}</p>
-                  <p className="truncate text-xs text-slate-500">{connection.capabilities.map((role) => role === 'source' ? 'Fonte' : 'Destino').join(' · ')}</p>
-                  {slackNeedsReconnect && <p className="mt-1 text-xs font-semibold text-amber-700">Reconecte o Slack para também usá-lo como fonte de mensagens.</p>}
+              <div key={connection.id} className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100"><ProviderIcon provider={connection.provider} /></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold">{connection.label}</p>
+                    <p className="truncate text-xs text-slate-500">{connection.capabilities.map((role) => role === 'source' ? 'Fonte' : 'Destino').join(' · ')}</p>
+                    {slackNeedsReconnect && <p className="mt-1 text-xs font-semibold text-amber-700">Reconecte o Slack para também usá-lo como fonte de mensagens.</p>}
+                  </div>
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">{connection.status}</span>
+                  <button type="button" disabled={Boolean(busy)} onClick={() => void testConnection(connection)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-violet-300 hover:text-violet-700 disabled:opacity-50">
+                    {busy === `test-${connection.id}` ? <RefreshCw size={16} className="animate-spin" /> : <Activity size={16} />} Testar
+                  </button>
+                  <button type="button" disabled={Boolean(busy)} onClick={() => void disconnect(connection)} className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                    <Trash2 size={16} /> Desconectar
+                  </button>
                 </div>
-                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">{connection.status}</span>
-                <button
-                  type="button"
-                  disabled={busy === String(connection.id)}
-                  onClick={() => void disconnect(connection)}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-                >
-                  <Trash2 size={16} /> Desconectar
-                </button>
+
+                {diagnostic && (
+                  <div className={`mt-4 rounded-xl border p-3 text-sm ${diagnostic.healthy ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-950'}`}>
+                    <div className="flex items-center gap-2 font-bold">
+                      {diagnostic.healthy ? <CheckCircle2 size={17} /> : <AlertCircle size={17} />}
+                      {diagnostic.healthy ? 'Conexão saudável' : 'Conexão requer atenção'}
+                    </div>
+                    <div className="mt-2 space-y-1 text-xs">
+                      {diagnostic.checks.map((check) => (
+                        <p key={check.role}><strong>{check.role === 'source' ? 'Fonte' : 'Destino'}:</strong> {check.message} {check.unavailableCount > 0 ? `(${check.unavailableCount} indisponível(is))` : ''}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

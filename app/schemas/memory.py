@@ -19,6 +19,8 @@ class ReportReviewRequest(BaseModel):
     def validate_approved_content(self) -> "ReportReviewRequest":
         if self.verdict == "edited" and not (self.approved_content or "").strip():
             raise ValueError("approved_content is required when verdict is edited")
+        if self.verdict == "approved" and self.approved_content is not None:
+            raise ValueError("approved_content must be omitted when verdict is approved")
         return self
 
 
@@ -33,3 +35,21 @@ class ReportReviewResponse(BaseModel):
     approved_content: str | None
     reason: str
     labels: list[str]
+
+
+class MemoryRule(BaseModel):
+    key: str
+    statement: str
+    evidence_count: int
+    last_seen_at: datetime
+
+
+class MemoryProfileResponse(BaseModel):
+    protocol: Literal["ark.memory.v1"] = "ark.memory.v1"
+    user_id: int
+    review_count: int
+    approved_count: int
+    edited_count: int
+    rejected_count: int
+    rules: list[MemoryRule]
+    examples: list[ReportReviewResponse]

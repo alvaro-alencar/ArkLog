@@ -11,6 +11,7 @@ from app.api.v1.routes.deliveries import router as deliveries_router
 from app.api.v1.routes.flows import router as flows_router
 from app.api.v1.routes.github import router as github_router
 from app.api.v1.routes.health import router as health_router
+from app.api.v1.routes.memory import router as memory_router
 from app.api.v1.routes.operations import router as operations_router
 from app.api.v1.routes.projects import router as projects_router
 from app.api.v1.routes.reports import router as reports_router
@@ -30,5 +31,6 @@ router.include_router(clickup_router, prefix="/clickup", tags=["clickup-legacy"]
 router.include_router(webhooks_router, prefix="/webhooks", tags=["webhooks"])
 router.include_router(projects_router, prefix="/projects", tags=["projects-legacy"])
 router.include_router(reports_router, prefix="/reports", tags=["reports"])
+router.include_router(memory_router, tags=["memory"])
 router.include_router(users_router, prefix="/users", tags=["users"])
 router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])

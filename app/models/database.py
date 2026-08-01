@@ -57,8 +57,6 @@ if database_url.startswith("sqlite"):
 else:
     hostname = urlsplit(database_url).hostname or ""
     if os.getenv("VERCEL") or "-pooler." in hostname:
-        # Serverless functions and transaction poolers should not retain a
-        # process-local SQLAlchemy pool between unrelated invocations.
         engine_options["poolclass"] = NullPool
 
 engine = create_async_engine(database_url, **engine_options)
@@ -75,7 +73,7 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    from app.models import tables  # noqa: F401
+    from app.models import memory, tables  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
